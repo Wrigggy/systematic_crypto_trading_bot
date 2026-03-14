@@ -293,7 +293,7 @@ def export_onnx(model: LSTMAlphaModel, seq_len: int, n_features: int, path: str)
             "input": {0: "batch_size"},
             "alpha": {0: "batch_size"},
         },
-        opset_version=14,
+        opset_version=18,
     )
     logger.info("Exported ONNX model to %s", path)
 

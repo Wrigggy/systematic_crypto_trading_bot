@@ -11,3 +11,12 @@ wheels/
 
 project_spec.md
 .claude/
+
+# Generated model files
+config/model.pt
+config/model.onnx
+
+# Historical data cache
+data/historical/
+
+.pytest_cache/
