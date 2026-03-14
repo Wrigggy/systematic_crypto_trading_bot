@@ -17,9 +17,10 @@ import json
 import logging
 import os
 import sys
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 import numpy as np
 import torch
@@ -37,10 +38,104 @@ from logging.handlers import RotatingFileHandler
 
 logger = logging.getLogger(__name__)
 
+# Resolve project root from this file's location so paths work regardless of CWD
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+# ── Wandb helpers ──────────────────────────────────────────────────────────
+
+_wandb_run = None  # module-level handle
+
+
+def _init_wandb(args: argparse.Namespace, extra_config: Optional[dict] = None) -> None:
+    """Initialize a wandb run if --wandb is set."""
+    global _wandb_run
+    if not getattr(args, "wandb", False):
+        return
+
+    import wandb
+
+    config = {
+        "symbols": args.symbols,
+        "data_source": "synthetic" if args.synthetic else "exchange",
+        "n_candles": args.n_candles if args.synthetic else None,
+        "days": args.days if not args.synthetic else None,
+        "seq_len": args.seq_len,
+        "forward_window": args.forward_window,
+        "epochs": args.epochs,
+        "batch_size": args.batch_size,
+        "lr": args.lr,
+        "device": args.device,
+        "amp": args.amp,
+        "compile": getattr(args, "compile", False),
+        "seed": args.seed,
+    }
+    if extra_config:
+        config.update(extra_config)
+
+    # Resolve device tag
+    device_tag = args.device
+    if device_tag == "auto":
+        device_tag = "cuda" if torch.cuda.is_available() else "cpu"
+
+    # Flags string
+    flags = []
+    if args.amp:
+        flags.append("amp")
+    if getattr(args, "compile", False):
+        flags.append("compile")
+    flag_str = f"_{'_'.join(flags)}" if flags else ""
+
+    # Candle count label
+    candle_k = args.n_candles // 1000 if args.synthetic else args.days
+    unit = "k" if args.synthetic else "d"
+
+    date_tag = datetime.now().strftime("%m%d")
+
+    # Group: device_epochs_candles_flags_date (one group per day per experiment)
+    group = args.wandb_group
+    if not group:
+        group = f"{device_tag}_e{args.epochs}_{candle_k}{unit}{flag_str}_{date_tag}"
+
+    # Run name: group_HHMMSS (nested under the group)
+    name = args.wandb_name
+    if not name:
+        ts = datetime.now().strftime("%H%M%S")
+        name = f"{group}_{ts}"
+
+    # Default tag to "test" if none provided
+    tags = args.wandb_tags.split(",") if args.wandb_tags else ["test"]
+
+    _wandb_run = wandb.init(
+        entity=args.wandb_entity,
+        project=args.wandb_project,
+        group=group,
+        name=name,
+        tags=tags,
+        config=config,
+    )
+    logger.info("wandb run: %s (group=%s)", _wandb_run.url, group)
+
+
+def _log_wandb(metrics: dict, step: Optional[int] = None) -> None:
+    """Log metrics to wandb if active."""
+    if _wandb_run is not None:
+        _wandb_run.log(metrics, step=step)
+
+
+def _finish_wandb(summary: Optional[dict] = None) -> None:
+    """Finalize wandb run."""
+    global _wandb_run
+    if _wandb_run is not None:
+        if summary:
+            for k, v in summary.items():
+                _wandb_run.summary[k] = v
+        _wandb_run.finish()
+        _wandb_run = None
+
 
 def setup_train_logging() -> None:
     """Configure console + rotating file logging for training runs."""
-    log_dir = Path("logs")
+    log_dir = PROJECT_ROOT / "logs"
     log_dir.mkdir(exist_ok=True)
 
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -63,8 +158,8 @@ def setup_train_logging() -> None:
 
     logger.info("Training log: %s", log_file)
 
-HISTORICAL_DIR = Path("data/historical")
-ARTIFACTS_DIR = Path("artifacts")
+HISTORICAL_DIR = PROJECT_ROOT / "data" / "historical"
+ARTIFACTS_DIR = PROJECT_ROOT / "artifacts"
 
 
 # ── Data Fetching ───────────────────────────────────────────────────────────
@@ -169,6 +264,95 @@ def raw_to_ohlcv(raw_data: List[list], symbol: str) -> List[OHLCV]:
 
 # ── Dataset Building ────────────────────────────────────────────────────────
 
+def _compute_all_features(candles: List[OHLCV], extractor: FeatureExtractor) -> np.ndarray:
+    """Compute features for every candle using vectorized numpy.
+
+    Returns: (N, 6) array — [rsi, ema_fast, ema_slow, atr, momentum, volatility].
+    Rows before min_candles are zero-filled.
+    """
+    n = len(candles)
+    closes = np.array([c.close for c in candles], dtype=np.float64)
+    highs = np.array([c.high for c in candles], dtype=np.float64)
+    lows = np.array([c.low for c in candles], dtype=np.float64)
+
+    features = np.zeros((n, 6), dtype=np.float32)
+    min_c = extractor.min_candles
+
+    # ── RSI: rolling gains/losses ──
+    rsi_p = extractor._rsi_period
+    deltas = np.diff(closes)  # (n-1,)
+    gains = np.where(deltas > 0, deltas, 0.0)
+    losses = np.where(deltas < 0, -deltas, 0.0)
+    rsi_all = np.full(n, 50.0, dtype=np.float64)
+    # Rolling mean via cumsum
+    cum_gains = np.concatenate([[0], np.cumsum(gains)])
+    cum_losses = np.concatenate([[0], np.cumsum(losses)])
+    for i in range(rsi_p, n):
+        avg_gain = (cum_gains[i] - cum_gains[i - rsi_p]) / rsi_p
+        avg_loss = (cum_losses[i] - cum_losses[i - rsi_p]) / rsi_p
+        if avg_loss < 1e-10:
+            rsi_all[i] = 100.0
+        else:
+            rs = avg_gain / avg_loss
+            rsi_all[i] = 100.0 - 100.0 / (1.0 + rs)
+
+    # ── EMA: incremental computation ──
+    def _ema_series(vals: np.ndarray, period: int) -> np.ndarray:
+        mult = 2.0 / (period + 1)
+        ema = np.zeros(n, dtype=np.float64)
+        ema[0] = vals[0]
+        for i in range(1, n):
+            ema[i] = vals[i] * mult + ema[i - 1] * (1 - mult)
+        return ema
+
+    ema_fast_all = _ema_series(closes, extractor._ema_fast)
+    ema_slow_all = _ema_series(closes, extractor._ema_slow)
+
+    # ── ATR: rolling true range ──
+    atr_p = extractor._atr_period
+    tr = np.zeros(n, dtype=np.float64)
+    for i in range(1, n):
+        tr[i] = max(highs[i] - lows[i],
+                     abs(highs[i] - closes[i - 1]),
+                     abs(lows[i] - closes[i - 1]))
+    cum_tr = np.cumsum(tr)
+    atr_all = np.zeros(n, dtype=np.float64)
+    for i in range(atr_p + 1, n):
+        atr_all[i] = (cum_tr[i] - cum_tr[i - atr_p]) / atr_p
+
+    # ── Momentum: rate of change (fully vectorized) ──
+    mom_w = extractor._momentum_window
+    mom_all = np.zeros(n, dtype=np.float64)
+    safe_denom = np.where(closes == 0, 1e-10, closes)
+    mom_all[mom_w:] = closes[mom_w:] / safe_denom[:n - mom_w] - 1.0
+
+    # ── Volatility: std of log returns (rolling via cumsum trick) ──
+    vol_w = extractor._volatility_window
+    safe_closes = np.where(closes <= 0, 1e-10, closes)
+    log_prices = np.log(safe_closes)
+    log_ret = np.diff(log_prices)  # (n-1,)
+    # Rolling mean and var via cumsum
+    cum_lr = np.concatenate([[0], np.cumsum(log_ret)])
+    cum_lr2 = np.concatenate([[0], np.cumsum(log_ret ** 2)])
+    vol_all = np.zeros(n, dtype=np.float64)
+    for i in range(vol_w + 1, n):
+        j = i - 1  # index into log_ret (length n-1, offset by 1 from closes)
+        s = cum_lr[j + 1] - cum_lr[j + 1 - vol_w]
+        s2 = cum_lr2[j + 1] - cum_lr2[j + 1 - vol_w]
+        var = s2 / vol_w - (s / vol_w) ** 2
+        vol_all[i] = np.sqrt(max(var, 0.0))
+
+    # Pack into features array
+    features[min_c:, 0] = rsi_all[min_c:]
+    features[min_c:, 1] = ema_fast_all[min_c:]
+    features[min_c:, 2] = ema_slow_all[min_c:]
+    features[min_c:, 3] = atr_all[min_c:]
+    features[min_c:, 4] = mom_all[min_c:]
+    features[min_c:, 5] = vol_all[min_c:]
+
+    return features
+
+
 def build_dataset(
     candles: List[OHLCV],
     extractor: FeatureExtractor,
@@ -180,46 +364,47 @@ def build_dataset(
     X: (N, seq_len, n_features) — feature sequences
     y: (N, 1) — forward returns mapped to [-1, 1] via tanh scaling
 
-    Args:
-        candles: full history of OHLCV candles
-        extractor: FeatureExtractor instance
-        seq_len: lookback window for LSTM
-        forward_window: how many candles ahead for the label
+    Computes all features once, then slices sliding windows — much faster
+    than recomputing features per sample.
     """
     min_start = extractor.min_candles + seq_len
     max_end = len(candles) - forward_window
+    n_samples = max_end - min_start
 
-    if min_start >= max_end:
+    if n_samples <= 0:
         raise ValueError(
             f"Not enough candles: need at least {min_start + forward_window}, got {len(candles)}"
         )
 
-    X_list = []
-    y_list = []
+    logger.info("Building dataset: %d samples (vectorized)", n_samples)
 
-    logger.info("Building dataset: %d samples", max_end - min_start)
+    # Step 1: compute features for all candles in one pass
+    t0 = time.time()
+    all_features = _compute_all_features(candles, extractor)
+    logger.info("Feature extraction: %.1fs", time.time() - t0)
 
-    for i in range(min_start, max_end):
-        # Feature sequence ending at candle[i]
-        window = candles[:i + 1]
-        seq = extractor.extract_sequence(window, seq_len=seq_len)
-        X_list.append(seq)
+    # Step 2: slice sliding windows + z-score normalize each window
+    t0 = time.time()
+    closes = np.array([c.close for c in candles], dtype=np.float64)
 
-        # Label: forward return
-        current_close = candles[i].close
-        future_close = candles[i + forward_window].close
-        if current_close > 0:
-            fwd_return = (future_close - current_close) / current_close
-        else:
-            fwd_return = 0.0
+    X = np.zeros((n_samples, seq_len, extractor.N_FEATURES), dtype=np.float32)
+    y = np.zeros((n_samples, 1), dtype=np.float32)
 
-        # Scale with tanh to [-1, 1], amplify small returns
-        label = float(np.tanh(fwd_return * 100.0))
-        y_list.append([label])
+    for idx, i in enumerate(range(min_start, max_end)):
+        window = all_features[i - seq_len + 1: i + 1]  # (seq_len, n_features)
+        # Z-score normalize per window
+        mean = window.mean(axis=0, keepdims=True)
+        std = window.std(axis=0, keepdims=True)
+        std = np.where(std < 1e-8, 1.0, std)
+        X[idx] = (window - mean) / std
 
-    X = np.array(X_list, dtype=np.float32)
-    y = np.array(y_list, dtype=np.float32)
+        # Label: forward return scaled by tanh
+        cur = closes[i]
+        fut = closes[i + forward_window]
+        fwd_return = (fut - cur) / cur if cur > 0 else 0.0
+        y[idx, 0] = np.tanh(fwd_return * 100.0)
 
+    logger.info("Window slicing: %.1fs", time.time() - t0)
     logger.info("Dataset shape: X=%s, y=%s", X.shape, y.shape)
     return X, y
 
@@ -271,8 +456,14 @@ def train_model(
 
     best_val_loss = float("inf")
     best_state = None
+    best_epoch = 0
+    epoch_times: list[float] = []
+
+    t_start = time.time()
 
     for epoch in range(epochs):
+        t_epoch = time.time()
+
         # Train
         model.train()
         train_loss = 0.0
@@ -303,21 +494,53 @@ def train_model(
 
         scheduler.step(val_loss)
 
+        epoch_dt = time.time() - t_epoch
+        epoch_times.append(epoch_dt)
+        cur_lr = optimizer.param_groups[0]["lr"]
+        improved = val_loss < best_val_loss
+
+        # Terminal output
+        marker = " *" if improved else ""
         logger.info(
-            "Epoch %d/%d  train_loss=%.6f  val_loss=%.6f  lr=%.2e",
-            epoch + 1, epochs, train_loss, val_loss,
-            optimizer.param_groups[0]["lr"],
+            "Epoch %d/%d  train=%.6f  val=%.6f  lr=%.2e  %.1fs%s",
+            epoch + 1, epochs, train_loss, val_loss, cur_lr, epoch_dt, marker,
         )
 
-        if val_loss < best_val_loss:
+        # wandb
+        _log_wandb({
+            "train/loss": train_loss,
+            "val/loss": val_loss,
+            "train/lr": cur_lr,
+            "train/epoch_time_s": epoch_dt,
+        }, step=epoch + 1)
+
+        if improved:
             best_val_loss = val_loss
+            best_epoch = epoch + 1
             best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
 
     if best_state:
         model.load_state_dict(best_state)
     model.cpu().eval()
 
-    logger.info("Best validation loss: %.6f", best_val_loss)
+    total_time = time.time() - t_start
+    avg_epoch = np.mean(epoch_times) if epoch_times else 0
+
+    # Summary banner
+    logger.info("─" * 60)
+    logger.info("Training complete in %.1fs (%.1fs/epoch avg)", total_time, avg_epoch)
+    logger.info("Best val_loss=%.6f @ epoch %d/%d", best_val_loss, best_epoch, epochs)
+    logger.info("Device: %s | AMP: %s | Compile: %s",
+                device, use_amp, use_compile)
+    logger.info("─" * 60)
+
+    _log_wandb({
+        "summary/best_val_loss": best_val_loss,
+        "summary/best_epoch": best_epoch,
+        "summary/total_time_s": total_time,
+        "summary/avg_epoch_time_s": avg_epoch,
+    })
+
     return model
 
 
@@ -325,11 +548,14 @@ def train_model(
 
 def export_onnx(model: LSTMAlphaModel, seq_len: int, n_features: int, path: str) -> None:
     """Export trained model to ONNX format."""
-    model.eval()
+    # Unwrap torch.compile's OptimizedModule if present
+    raw_model = getattr(model, "_orig_mod", model)
+    raw_model.eval()
+    raw_model.cpu()
     dummy_input = torch.randn(1, seq_len, n_features)
 
     torch.onnx.export(
-        model,
+        raw_model,
         dummy_input,
         path,
         input_names=["input"],
@@ -431,7 +657,16 @@ def main():
     parser.add_argument("--seed", type=int, default=42, help="Random seed for synthetic data")
     parser.add_argument("--amp", action="store_true", help="Enable automatic mixed precision (GPU recommended)")
     parser.add_argument("--compile", action="store_true", help="Enable torch.compile (PyTorch 2.0+, GPU recommended)")
+    # wandb
+    parser.add_argument("--wandb", action="store_true", help="Enable wandb experiment tracking")
+    parser.add_argument("--wandb-entity", default="Base-Work-Space", help="wandb entity/team")
+    parser.add_argument("--wandb-project", default="trading-lstm", help="wandb project name")
+    parser.add_argument("--wandb-group", default="", help="wandb run group (auto-generated if empty)")
+    parser.add_argument("--wandb-name", default="", help="wandb run name (auto-generated if empty)")
+    parser.add_argument("--wandb-tags", default="", help="Comma-separated wandb tags")
     args = parser.parse_args()
+
+    _init_wandb(args)
 
     feature_config = {
         "rsi_period": 14,
@@ -502,6 +737,10 @@ def main():
     # Export to ONNX
     onnx_path = str(ARTIFACTS_DIR / "model.onnx")
     export_onnx(model, args.seq_len, extractor.N_FEATURES, onnx_path)
+
+    _finish_wandb(summary={
+        "model_path": onnx_path,
+    })
 
     logger.info("Done! Model ready at %s", onnx_path)
 
