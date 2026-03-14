@@ -35,10 +35,31 @@ docker run --rm trading-bot
 docker run --rm -v $(pwd)/config:/app/config trading-bot --mode live --config config/my_config.yaml
 ```
 
+## Scripts
+
+All scripts live in `scripts/` with comments and configurable env vars:
+
+```bash
+./scripts/start.sh              # Production runner with auto-restart (up to 50 retries)
+./scripts/paper_trade.sh        # Quick paper trading session
+./scripts/train.sh              # Train LSTM with synthetic data
+./scripts/test.sh               # Run tests with coverage
+./scripts/export_model.sh       # Export .pt → .onnx
+./scripts/generate_data.sh      # Generate synthetic CSV data
+```
+
+Examples with overrides:
+
+```bash
+DEVICE=cuda USE_AMP=--amp ./scripts/train.sh    # GPU training with mixed precision
+CONFIG=config/fast.yaml ./scripts/paper_trade.sh # Custom config
+./scripts/test.sh -k "test_buy"                  # Filter tests by keyword
+```
+
 ## Testing
 
 ```bash
-# Run all tests (124 tests, ~0.6s)
+# Run all tests (158 tests, ~27s)
 pytest
 
 # Single file or test
@@ -49,7 +70,7 @@ pytest tests/test_features.py::TestRSI::test_all_gains
 pytest --cov=. --cov-report=term-missing
 ```
 
-Test modules cover: Pydantic models, feature extraction (RSI/EMA/ATR/momentum/vol), portfolio tracker (cash/PnL/NAV/exposure), strategy state machine, risk shield (stops/circuit breaker/rate limit/exposure caps), alpha engine (rule-based/ensemble), async buffer, sim executor (market/limit fills), and order manager lifecycle.
+Test modules cover: Pydantic models, feature extraction (RSI/EMA/ATR/momentum/vol), portfolio tracker (cash/PnL/NAV/exposure), strategy state machine, risk shield (stops/circuit breaker/rate limit/exposure caps), alpha engine (rule-based/ensemble), async buffer, sim executor (market/limit fills), order manager lifecycle, simulated feed (GBM/CSV replay), training pipeline (dataset building/synthetic generation), integration (full pipeline end-to-end), and config loading.
 
 ## Architecture
 
@@ -72,6 +93,9 @@ Test modules cover: Pydantic models, feature extraction (RSI/EMA/ATR/momentum/vo
 trading-competition/
 ├── config/
 │   └── default.yaml            # All tunable parameters (thresholds, risk limits, fees)
+├── artifacts/                  # Model checkpoints (.pt, .onnx) — gitignored
+├── logs/                       # Rotating log files — gitignored
+├── scripts/                    # Shell scripts for common operations
 ├── core/
 │   └── models.py               # Pydantic data models (Tick, OHLCV, Signal, Order, Position)
 ├── data/
@@ -85,7 +109,7 @@ trading-competition/
 │   ├── lstm_model.py           # PyTorch LSTM architecture (2-layer, 64 hidden)
 │   ├── model_wrapper.py        # Loads .onnx or .pt model for inference
 │   ├── inference.py            # AlphaEngine: rule-based / lstm / ensemble scoring
-│   └── train.py                # Offline training script (fetch data → train → export ONNX)
+│   └── train.py                # Offline training script (synthetic or Binance data → train → ONNX)
 ├── strategy/
 │   ├── logic.py                # Per-symbol state machine (FLAT → LONG_PENDING → HOLDING)
 │   └── monitor.py              # Central event loop / orchestrator
@@ -97,8 +121,7 @@ trading-competition/
 │   ├── sim_executor.py         # Paper trading executor (instant fills + slippage)
 │   └── order_manager.py        # Order lifecycle, fill callbacks
 ├── main.py                     # Entry point — wires everything, runs asyncio loop
-├── pyproject.toml              # uv project config + dependencies
-└── config/default.yaml         # Tunable parameters
+└── pyproject.toml              # uv project config + dependencies
 ```
 
 ## Modes of Operation
@@ -124,8 +147,36 @@ python main.py --mode live
 - Executes orders via ccxt async exchange client
 - Requires API keys in `config/default.yaml` or a custom config file
 
+## Training the LSTM Model
+
 ```bash
-python main.py --config config/my_live_config.yaml --mode live
+# Train with synthetic data (no API needed — works anywhere)
+python -m models.train --synthetic --symbols BTC/USDT --device auto
+
+# Train with real data from Binance
+python -m models.train --symbols BTC/USDT --days 90 --device auto
+
+# GPU training with mixed precision and torch.compile
+python -m models.train --synthetic --symbols BTC/USDT ETH/USDT --device cuda --amp --compile
+
+# Or use the script
+./scripts/train.sh
+```
+
+**What happens:**
+
+1. Generates synthetic GBM candles (or fetches from Binance via ccxt with CSV caching)
+2. Computes feature sequences using `FeatureExtractor`
+3. Labels = forward 5-minute return, scaled to [-1, 1] via tanh
+4. Trains with MSE loss, chronological 80/20 split (no shuffle — time-series)
+5. Saves `artifacts/model.pt` (PyTorch) and `artifacts/model.onnx` (ONNX)
+
+Then switch the config:
+
+```yaml
+alpha:
+  engine: "lstm"              # or "ensemble" for average of rule-based + LSTM
+  model_path: "artifacts/model.onnx"
 ```
 
 ## Design Decisions
@@ -179,6 +230,7 @@ alpha:
   engine: "rule_based"      # "rule_based" | "lstm" | "ensemble"
   entry_threshold: 0.6      # alpha > this → buy
   exit_threshold: -0.2      # alpha < this → sell
+  model_path: "artifacts/model.onnx"
 
 # Risk limits
 risk:
@@ -200,36 +252,6 @@ paper:
   speed_multiplier: 60.0    # 60x = 1 hour of candles per minute of wall time
 ```
 
-## Training the LSTM Model
-
-```bash
-# Fetch 90 days of BTC 1m candles from Binance, train, export to ONNX
-python -m models.train --symbols BTC/USDT --days 90
-
-# Train on multiple symbols
-python -m models.train --symbols BTC/USDT ETH/USDT --days 90 --epochs 50
-
-# Use GPU if available
-python -m models.train --symbols BTC/USDT --device auto
-```
-
-**What happens:**
-
-1. Fetches historical OHLCV from Binance via ccxt REST API
-2. Caches to `data/historical/BTC_USDT_1m.csv` (subsequent runs reuse cache, only fetch new data)
-3. Computes feature sequences using `FeatureExtractor`
-4. Labels = forward 5-minute return, scaled to [-1, 1] via tanh
-5. Trains with MSE loss, chronological 80/20 split (no shuffle — time-series)
-6. Saves `config/model.pt` (PyTorch) and `config/model.onnx` (ONNX)
-
-Then switch the config:
-
-```yaml
-alpha:
-  engine: "lstm"              # or "ensemble" for average of rule-based + LSTM
-  model_path: "config/model.onnx"
-```
-
 ## Risk Management
 
 Three layers of protection, in order of trigger speed:
@@ -244,6 +266,14 @@ Pre-trade checks also enforce:
 - Long-only: rejects any order that would create a short
 - Cash check: won't buy more than you can afford
 
+## Logging
+
+Both trading and training sessions log to console + rotating files in `logs/`:
+- Trading: `logs/trading_{mode}_{timestamp}.log`
+- Training: `logs/train_{timestamp}.log`
+
+Files rotate at 10MB with 5 backups.
+
 ## Tech Stack
 
 | Component | Choice | Why |
@@ -253,22 +283,6 @@ Pre-trade checks also enforce:
 | Data models | `pydantic` | Validation, serialization, type safety |
 | Exchange API | `ccxt` | Unified interface for 100+ exchanges |
 | Indicators | `numpy` (pure) | Fast, no DataFrame overhead in hot path |
-| DL training | `torch` | GPU support, flexible, well-documented |
+| DL training | `torch` | GPU support, `torch.compile`, AMP mixed precision |
 | DL inference | `onnxruntime` | 2-5x faster than torch for single-sample CPU inference |
 | Config | `pyyaml` | Simple, human-readable |
-
-## Dependencies
-
-Managed by `uv` via `pyproject.toml`. Key packages:
-
-```
-pydantic >= 2.12       # data models
-pyyaml >= 6.0          # config
-numpy >= 2.2           # feature computation
-torch >= 2.10          # LSTM training
-onnxruntime < 1.19     # LSTM inference (pinned for Python 3.10 compat)
-ccxt >= 4.5            # exchange API
-aiohttp >= 3.13        # async HTTP
-websockets >= 16.0     # WebSocket connections
-pandas >= 2.3          # offline data handling (training script only)
-```
