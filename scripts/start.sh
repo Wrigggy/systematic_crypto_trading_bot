@@ -1,10 +1,21 @@
 #!/usr/bin/env bash
+# ============================================================================
+# Production runner with auto-restart on crash.
+#
+# Restarts the bot up to MAX_RESTARTS times if it exits non-zero.
+# Logs each run to logs/bot_<timestamp>.log (tee'd to console).
+#
+# Examples:
+#   ./scripts/start.sh                        # paper mode (default)
+#   ./scripts/start.sh --mode live            # live mode
+#   MAX_RESTARTS=10 ./scripts/start.sh        # limit restarts
+# ============================================================================
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-cd "$SCRIPT_DIR"
+PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$PROJECT_DIR"
 
-LOG_DIR="$SCRIPT_DIR/logs"
+LOG_DIR="$PROJECT_DIR/logs"
 mkdir -p "$LOG_DIR"
 
 # Activate venv
