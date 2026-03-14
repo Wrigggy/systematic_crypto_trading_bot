@@ -23,7 +23,18 @@ docker build -t trading-bot .
 docker run --rm trading-bot
 docker run --rm -v $(pwd)/config:/app/config trading-bot --mode live
 
-# No test suite or linter is configured yet
+# Run all tests
+pytest
+
+# Run a single test file
+pytest tests/test_strategy.py
+
+# Run a single test class or method
+pytest tests/test_tracker.py::TestBuyFill
+pytest tests/test_features.py::TestRSI::test_all_gains
+
+# Run with coverage
+pytest --cov=. --cov-report=term-missing
 ```
 
 ## Architecture

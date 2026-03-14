@@ -35,6 +35,22 @@ docker run --rm trading-bot
 docker run --rm -v $(pwd)/config:/app/config trading-bot --mode live --config config/my_config.yaml
 ```
 
+## Testing
+
+```bash
+# Run all tests (124 tests, ~0.6s)
+pytest
+
+# Single file or test
+pytest tests/test_strategy.py
+pytest tests/test_features.py::TestRSI::test_all_gains
+
+# With coverage report
+pytest --cov=. --cov-report=term-missing
+```
+
+Test modules cover: Pydantic models, feature extraction (RSI/EMA/ATR/momentum/vol), portfolio tracker (cash/PnL/NAV/exposure), strategy state machine, risk shield (stops/circuit breaker/rate limit/exposure caps), alpha engine (rule-based/ensemble), async buffer, sim executor (market/limit fills), and order manager lifecycle.
+
 ## Architecture
 
 ```

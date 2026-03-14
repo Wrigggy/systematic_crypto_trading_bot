@@ -169,7 +169,8 @@ class TestATRStop:
         pos.state = StrategyState.HOLDING
         pos.peak_price = 100.0
 
-        candle = make_candle(close=95.0)  # above 90 ATR stop
+        # Price 98 is above ATR stop (90) AND above trailing stop (97)
+        candle = make_candle(close=98.0)
         orders = shield.check_stops(tracker, {"BTC/USDT": candle}, {"BTC/USDT": 5.0})
         assert len(orders) == 0
 
