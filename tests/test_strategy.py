@@ -125,9 +125,13 @@ class TestPositionSizing:
     def test_sizing_is_percentage_of_nav(self, logic, snap_100k):
         signal = make_signal(alpha=0.8)
         order = logic.on_signal(signal, snap_100k, current_price=100.0)
-        # 10% of 100k NAV = 10000, divided by price 100 = 100 shares
-        # capped at 99% of cash = 99000 / 100 = 990
-        expected_qty = min(10000.0, 99000.0) / 100.0
+        # Half-Kelly sizing with alpha=0.8, entry_threshold=0.6:
+        # raw_kelly = 0.55 - 0.45/1.5 = 0.25
+        # alpha_intensity = (0.8 - 0.6) / (1.0 - 0.6) = 0.5
+        # scaled = 0.5 * 0.25 * 0.5 = 0.0625
+        # position_pct = 0.05 + 0.0625 * 0.10 = 0.05625
+        # allocation = 100000 * 0.05625 = 5625.0, capped by cash*0.99 = 99000
+        expected_qty = 5625.0 / 100.0
         assert order.quantity == pytest.approx(expected_qty)
 
     def test_sizing_capped_by_cash(self):

@@ -28,11 +28,17 @@ alpha:
   entry_threshold: 0.6
   exit_threshold: -0.2
   model_path: "artifacts/model.onnx"
-  seq_len: 30               # LSTM lookback window
+  seq_len: 60               # LSTM lookback window
 
 strategy:
   max_positions_per_symbol: 1
-  position_size_pct: 0.10   # 10% of portfolio per trade
+  position_size_pct: 0.10   # fallback if Kelly is disabled
+  base_size_pct: 0.05       # Half-Kelly floor
+  max_size_pct: 0.15        # Half-Kelly ceiling
+  kelly_fraction: 0.5       # half-Kelly multiplier
+  estimated_win_rate: 0.55  # conservative prior
+  estimated_payoff: 1.5     # avg_win / avg_loss
+  urgent_alpha_threshold: 0.85  # alpha above this → market order
 
 risk:
   max_portfolio_exposure: 0.50
@@ -40,12 +46,14 @@ risk:
   trailing_stop_pct: 0.03
   atr_stop_multiplier: 2.0
   daily_drawdown_limit: 0.05
-  max_orders_per_minute: 10
+  max_orders_per_minute: 60  # was 10, now supports 66 symbols
 
 execution:
   default_order_type: "market"
   limit_offset_bps: 5
   order_timeout_seconds: 30
+  fee_market_bps: 10        # 0.1% taker fee
+  fee_limit_bps: 5          # 0.05% maker fee
 
 paper:
   initial_capital: 100000.0
