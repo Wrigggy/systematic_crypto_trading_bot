@@ -36,6 +36,14 @@ class StrategyLogic:
         self._exit_threshold: float = alpha_cfg.get("exit_threshold", -0.2)
         self._position_size_pct: float = strategy_cfg.get("position_size_pct", 0.10)
 
+        # Half-Kelly sizing parameters
+        self._base_size_pct: float = strategy_cfg.get("base_size_pct", 0.05)
+        self._max_size_pct: float = strategy_cfg.get("max_size_pct", 0.15)
+        self._kelly_fraction: float = strategy_cfg.get("kelly_fraction", 0.5)
+        self._win_rate: float = strategy_cfg.get("estimated_win_rate", 0.55)
+        self._payoff_ratio: float = strategy_cfg.get("estimated_payoff", 1.5)
+        self._urgent_alpha_threshold: float = strategy_cfg.get("urgent_alpha_threshold", 0.85)
+
     @property
     def state(self) -> StrategyState:
         return self._state
@@ -56,21 +64,34 @@ class StrategyLogic:
         """
         if self._state == StrategyState.FLAT:
             if signal.alpha_score > self._entry_threshold:
-                qty = self._compute_buy_quantity(portfolio, current_price)
+                qty = self._compute_buy_quantity(portfolio, current_price, signal.alpha_score)
                 if qty <= 0:
                     return None
 
+                # Use MARKET for urgent alpha, LIMIT otherwise to save on fees
+                if signal.alpha_score > self._urgent_alpha_threshold:
+                    order_type = OrderType.MARKET
+                    price = None
+                    order_type_label = "MARKET"
+                else:
+                    order_type = OrderType.LIMIT
+                    price = round(current_price * 1.0005, 8)  # small offset above current
+                    order_type_label = "LIMIT"
+
                 self._state = StrategyState.LONG_PENDING
                 logger.info(
-                    "[%s] FLAT → LONG_PENDING: alpha=%.3f > %.3f, qty=%.6f",
-                    self._symbol, signal.alpha_score, self._entry_threshold, qty,
+                    "[%s] FLAT → LONG_PENDING: alpha=%.3f > %.3f, qty=%.6f, order=%s",
+                    self._symbol, signal.alpha_score, self._entry_threshold, qty, order_type_label,
                 )
-                return Order(
+                order = Order(
                     symbol=self._symbol,
                     side=Side.BUY,
-                    order_type=OrderType.MARKET,
+                    order_type=order_type,
                     quantity=qty,
                 )
+                if price is not None:
+                    order.price = price
+                return order
 
         elif self._state == StrategyState.HOLDING:
             if signal.alpha_score < self._exit_threshold:
@@ -129,15 +150,25 @@ class StrategyLogic:
         """Force state to FLAT (used by circuit breaker)."""
         self._state = StrategyState.FLAT
 
-    def _compute_buy_quantity(self, portfolio: PortfolioSnapshot, current_price: float) -> float:
-        """Compute buy quantity based on position sizing."""
+    def _compute_buy_quantity(self, portfolio: PortfolioSnapshot, current_price: float, alpha_score: float) -> float:
+        """Compute buy quantity using Half-Kelly position sizing."""
         if portfolio.cash <= 0 or current_price <= 0:
             return 0.0
 
-        # Allocate position_size_pct of total portfolio
-        allocation = portfolio.nav * self._position_size_pct
-        # Don't exceed available cash
-        allocation = min(allocation, portfolio.cash * 0.99)
+        # Half-Kelly scaling
+        raw_kelly = self._win_rate - (1 - self._win_rate) / self._payoff_ratio
+        alpha_intensity = (alpha_score - self._entry_threshold) / (1.0 - self._entry_threshold)
+        alpha_intensity = max(0.0, min(1.0, alpha_intensity))
 
-        qty = allocation / current_price
-        return qty
+        scaled = self._kelly_fraction * raw_kelly * alpha_intensity
+        position_pct = self._base_size_pct + scaled * (self._max_size_pct - self._base_size_pct)
+        position_pct = max(self._base_size_pct, min(self._max_size_pct, position_pct))
+
+        logger.info(
+            "[%s] Half-Kelly sizing: raw_kelly=%.4f, alpha_intensity=%.4f, position_pct=%.4f",
+            self._symbol, raw_kelly, alpha_intensity, position_pct,
+        )
+
+        allocation = portfolio.nav * position_pct
+        allocation = min(allocation, portfolio.cash * 0.99)
+        return allocation / current_price
