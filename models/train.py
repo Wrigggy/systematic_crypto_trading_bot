@@ -322,7 +322,7 @@ def _compute_all_features(candles: List[OHLCV], extractor: FeatureExtractor) -> 
                      abs(lows[i] - closes[i - 1]))
     cum_tr = np.cumsum(tr)
     atr_all = np.zeros(n, dtype=np.float64)
-    for i in range(atr_p + 1, n):
+    for i in range(atr_p, n):
         atr_all[i] = (cum_tr[i] - cum_tr[i - atr_p]) / atr_p
 
     # ── Momentum: rate of change (fully vectorized) ──
