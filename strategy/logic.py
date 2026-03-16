@@ -75,7 +75,7 @@ class StrategyLogic:
                     order_type_label = "MARKET"
                 else:
                     order_type = OrderType.LIMIT
-                    price = round(current_price * 1.0005, 8)  # small offset above current
+                    price = round(current_price * 0.9995, 8)  # slight discount for maker fill
                     order_type_label = "LIMIT"
 
                 self._state = StrategyState.LONG_PENDING
