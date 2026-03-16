@@ -74,6 +74,9 @@ class StrategyMonitor:
 
     async def _process_iteration(self, iteration: int) -> None:
         """Process one iteration: for each symbol, run the full pipeline."""
+        # Check pending limit orders for fills
+        await self._order_manager.check_pending()
+
         snapshot = self._tracker.snapshot()
         latest_candles: Dict[str, OHLCV] = {}
         atr_values: Dict[str, float] = {}
