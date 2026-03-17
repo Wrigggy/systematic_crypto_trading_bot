@@ -1,0 +1,7 @@
+2026-03-17 09:40:51,742 INFO wandb run: https://wandb.ai/Base-Work-Space/trading-lstm/runs/k90prmf9 (group=cuda_e50_8M_amp_sweep_0317)
+2026-03-17 09:40:51,743 INFO Loading pre-built dataset from artifacts/dataset_65sym_60seq.npz
+2026-03-17 09:42:45,417 INFO Loaded in 113.7s: Train=6707243, Val=1676824
+2026-03-17 09:42:45,418 INFO Train: 6707243 samples, Val: 1676824 samples
+2026-03-17 09:42:45,418 INFO Training on device: cuda (model: lstm)
+2026-03-17 09:42:45,890 INFO Model parameters: 54849
+2026-03-17 09:42:48,404 INFO Automatic mixed precision enabled

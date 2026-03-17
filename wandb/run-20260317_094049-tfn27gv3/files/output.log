@@ -1,0 +1,9 @@
+2026-03-17 09:40:51,073 INFO wandb run: https://wandb.ai/Base-Work-Space/trading-lstm/runs/tfn27gv3 (group=cuda_e50_8M_amp_sweep_0317)
+2026-03-17 09:40:51,074 INFO Loading pre-built dataset from artifacts/dataset_65sym_60seq.npz
+2026-03-17 09:42:44,866 INFO Loaded in 113.8s: Train=6707243, Val=1676824
+2026-03-17 09:42:44,867 INFO Train: 6707243 samples, Val: 1676824 samples
+2026-03-17 09:42:44,867 INFO Training on device: cuda (model: transformer)
+/scratch/gpfs/ZHUANGL/qw3460/workspace/trading_competition/models/transformer_model.py:55: UserWarning: enable_nested_tensor is True, but self.use_nested_tensor is False because encoder_layer.norm_first was True
+  self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
+2026-03-17 09:42:45,877 INFO Model parameters: 402817
+2026-03-17 09:42:48,408 INFO Automatic mixed precision enabled
