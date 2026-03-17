@@ -24,3 +24,7 @@ logs/
 .pytest_cache/
 
 .coverage
+
+# Environment secrets
+.env
+!.env.example

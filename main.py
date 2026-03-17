@@ -73,11 +73,19 @@ def load_config(path: str) -> dict:
 
 
 def _apply_env_overrides(config: dict) -> None:
-    """Override config values from environment variables (never commit secrets)."""
+    """Override config values from environment variables (never commit secrets).
+
+    Competition keys (ROOSTOO_COMP_*) take priority over testing keys (ROOSTOO_*).
+    """
     roostoo_cfg = config.setdefault("roostoo", {})
-    if os.environ.get("ROOSTOO_API_KEY"):
+    # Competition keys take priority over testing keys
+    if os.environ.get("ROOSTOO_COMP_API_KEY"):
+        roostoo_cfg["api_key"] = os.environ["ROOSTOO_COMP_API_KEY"]
+    elif os.environ.get("ROOSTOO_API_KEY"):
         roostoo_cfg["api_key"] = os.environ["ROOSTOO_API_KEY"]
-    if os.environ.get("ROOSTOO_API_SECRET"):
+    if os.environ.get("ROOSTOO_COMP_API_SECRET"):
+        roostoo_cfg["api_secret"] = os.environ["ROOSTOO_COMP_API_SECRET"]
+    elif os.environ.get("ROOSTOO_API_SECRET"):
         roostoo_cfg["api_secret"] = os.environ["ROOSTOO_API_SECRET"]
 
     exchange_cfg = config.setdefault("exchange", {})
