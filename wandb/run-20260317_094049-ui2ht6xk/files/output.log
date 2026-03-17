@@ -1,7 +1,0 @@
-2026-03-17 09:40:52,562 INFO wandb run: https://wandb.ai/Base-Work-Space/trading-lstm/runs/ui2ht6xk (group=cuda_e50_8M_amp_sweep_0317)
-2026-03-17 09:40:52,563 INFO Loading pre-built dataset from artifacts/dataset_65sym_60seq.npz
-2026-03-17 09:42:47,486 INFO Loaded in 114.9s: Train=6707243, Val=1676824
-2026-03-17 09:42:47,487 INFO Train: 6707243 samples, Val: 1676824 samples
-2026-03-17 09:42:47,487 INFO Training on device: cuda (model: lstm)
-2026-03-17 09:42:47,743 INFO Model parameters: 207937
-2026-03-17 09:42:50,450 INFO Automatic mixed precision enabled
