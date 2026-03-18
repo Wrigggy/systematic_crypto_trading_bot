@@ -32,6 +32,8 @@ class LiveBuffer:
         self._taker_history: Dict[str, deque] = {}
         self._lock = asyncio.Lock()
         self._event = asyncio.Event()
+        # Resampled candle storage: {minutes: {symbol: deque[OHLCV]}}
+        self._resampled: Dict[int, Dict[str, deque]] = {}
 
     async def push_tick(self, tick: Tick) -> None:
         async with self._lock:
@@ -131,6 +133,23 @@ class LiveBuffer:
                 "funding_rate": funding,
                 "taker_ratio": taker,
             }
+
+    async def push_resampled(self, minutes: int, candle: OHLCV) -> None:
+        """Store a completed resampled candle (e.g. 15m or 1h bar)."""
+        async with self._lock:
+            if minutes not in self._resampled:
+                self._resampled[minutes] = {}
+            if candle.symbol not in self._resampled[minutes]:
+                self._resampled[minutes][candle.symbol] = deque(maxlen=self._max_candles)
+            self._resampled[minutes][candle.symbol].append(candle)
+
+    async def get_resampled_candles(self, symbol: str, minutes: int, n: int = 50) -> List[OHLCV]:
+        """Return last n resampled candles for a symbol at given timeframe."""
+        async with self._lock:
+            buf = self._resampled.get(minutes, {}).get(symbol, deque())
+            if n <= 0 or n >= len(buf):
+                return list(buf)
+            return list(buf)[-n:]
 
     def candle_count(self, symbol: str) -> int:
         return len(self._candles.get(symbol, deque()))
