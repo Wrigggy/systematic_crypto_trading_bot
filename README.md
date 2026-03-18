@@ -220,11 +220,11 @@ Test modules cover: Pydantic models, feature extraction (RSI/EMA/ATR/momentum/vo
 | Category | Features | Timeframe | Source |
 |----------|----------|-----------|--------|
 | Price-derived | RSI(14), EMA(12/26), ATR(14), Momentum(10), Volatility(20) | 1m | Candles |
-| Web3 sentiment | Funding rate | Real-time | Binance Futures WS |
-| Order flow | Taker buy/sell ratio | 5m | Binance REST |
-| Microstructure | Order book imbalance, Volume ratio | 100ms / per candle | Binance Depth WS |
+| Web3 sentiment | Funding rate | Real-time (per-candle history) | Binance Futures WS |
+| Order flow | Taker buy/sell ratio | 5m (per-candle history) | Binance REST |
+| Microstructure | Order book imbalance, Volume ratio | 100ms / per candle (per-candle history) | Binance Depth WS |
 
-All supplementary endpoints are free, require no API key, and fail gracefully (features default to neutral values on timeout).
+All supplementary endpoints are free, require no API key, and fail gracefully (features default to neutral values on timeout). Supplementary features (funding rate, taker ratio, order book imbalance) are stored as per-candle time series in `LiveBuffer`, providing natural variation for LSTM z-score normalization at inference time.
 
 ## Project Structure
 

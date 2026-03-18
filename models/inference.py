@@ -43,7 +43,8 @@ class AlphaEngine:
         self._w_ema = 0.3
         self._w_vol_penalty = 0.1
 
-    def score(self, candles: List[OHLCV], supplementary: Optional[dict] = None) -> Signal:
+    def score(self, candles: List[OHLCV], supplementary: Optional[dict] = None,
+              supplementary_history: Optional[dict] = None) -> Signal:
         """Generate alpha signal from candle history."""
         t0 = time.perf_counter()
         features = self._extractor.extract(candles, supplementary=supplementary)
@@ -52,11 +53,11 @@ class AlphaEngine:
             alpha = self._rule_based_score(features)
             source = "rule_based"
         elif self._engine_type in ("lstm", "transformer"):
-            alpha = self._model_score(candles, supplementary)
+            alpha = self._model_score(candles, supplementary, supplementary_history)
             source = self._engine_type
         elif self._engine_type == "ensemble":
             rule_alpha = self._rule_based_score(features)
-            model_alpha = self._model_score(candles, supplementary)
+            model_alpha = self._model_score(candles, supplementary, supplementary_history)
             alpha = 0.5 * rule_alpha + 0.5 * model_alpha
             source = "ensemble"
         else:
@@ -114,13 +115,16 @@ class AlphaEngine:
 
         return alpha
 
-    def _model_score(self, candles: List[OHLCV], supplementary: Optional[dict] = None) -> float:
+    def _model_score(self, candles: List[OHLCV], supplementary: Optional[dict] = None,
+                     supplementary_history: Optional[dict] = None) -> float:
         """Run neural model (LSTM or Transformer) inference on feature sequence."""
         if self._model is None or not self._model.is_loaded:
             logger.warning("Model not loaded, returning 0.0")
             return 0.0
 
-        seq = self._extractor.extract_sequence(candles, seq_len=self._seq_len, supplementary=supplementary)
+        seq = self._extractor.extract_sequence(candles, seq_len=self._seq_len,
+                                               supplementary=supplementary,
+                                               supplementary_history=supplementary_history)
         return self._model.predict(seq)
 
     @property

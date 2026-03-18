@@ -128,7 +128,10 @@ class StrategyMonitor:
             if symbol not in alpha_ready:
                 continue
 
-            signal = self._alpha_engine.score(candles, supplementary=supplementary)
+            supplementary_history = await self._buffer.get_supplementary_history(
+                symbol, self._alpha_engine._seq_len)
+            signal = self._alpha_engine.score(candles, supplementary=supplementary,
+                                              supplementary_history=supplementary_history)
 
             # ── Strategy Decision ──
             snapshot = self._tracker.snapshot()
