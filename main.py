@@ -373,7 +373,7 @@ async def main(config: dict) -> None:
             else:
                 logger.warning("Could not get ticker for %s, skipping position recovery", symbol)
 
-        # 11c. Seed trade — buy $1 of BTC to ensure participation record
+        # 11c. Seed trade — buy $2 of BTC to ensure participation record
         has_any_position = any(
             pos.quantity > 0 for pos in tracker.snapshot().positions
         )
@@ -381,7 +381,7 @@ async def main(config: dict) -> None:
             seed_symbol = "BTC/USDT"
             seed_price = await executor.get_ticker(seed_symbol)
             if seed_price and seed_price > 0:
-                seed_qty = 1.0 / seed_price  # $1 worth
+                seed_qty = 2.0 / seed_price  # $2 worth (safely above $1 MiniOrder)
                 seed_order = Order(
                     symbol=seed_symbol,
                     side=Side.BUY,
@@ -390,7 +390,7 @@ async def main(config: dict) -> None:
                 )
                 result = await order_manager.submit(seed_order)
                 logger.info(
-                    "Seed trade: BUY $1 of %s qty=%.8f — status=%s",
+                    "Seed trade: BUY $2 of %s qty=%.8f — status=%s",
                     seed_symbol,
                     seed_qty,
                     result.status.value,
