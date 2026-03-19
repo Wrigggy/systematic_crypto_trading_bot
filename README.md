@@ -9,27 +9,23 @@ Algorithmic trading bot for the Roostoo 10-day crypto trading competition. Long-
 Get the bot running in Roostoo competition mode as fast as possible:
 
 ```bash
-# 1. Clone, install, activate
-git clone <repo-url> && cd trading-competition
+# 1. Clone and enter repo
+git clone https://github.com/qunzhongwang/trading_competition.git
+cd trading_competition
+
+# 2. Install uv and dependencies
 curl -LsSf https://astral.sh/uv/install.sh | sh  # skip if you have uv
+export PATH="$HOME/.local/bin:$PATH"
 uv venv .venv && source .venv/bin/activate && uv sync
 
-# 2. Set up API credentials
+# 3. Set API credentials
 cp .env.example .env
-# Edit .env — fill in your Roostoo API key and secret:
-#   ROOSTOO_API_KEY=your_key_here
-#   ROOSTOO_API_SECRET=your_secret_here
-# For the actual competition, use ROOSTOO_COMP_API_KEY / ROOSTOO_COMP_API_SECRET instead
+# Edit .env with your keys:
+#   ROOSTOO_COMP_API_KEY=your_key_here
+#   ROOSTOO_COMP_API_SECRET=your_secret_here
 
-# 3. Verify everything works (dry run with paper mode)
-python main.py  # Ctrl+C after a few minutes — check for errors
-
-# 4. Start competition mode
-python main.py --mode roostoo
-# Or use the auto-restart script:
+# 4. Start competition mode (auto-restarts on crash)
 ./scripts/start_competition.sh
-# Or use the convenience script:
-./scripts/run.sh roostoo
 ```
 
 #### Optional: Train LSTM Model
@@ -47,63 +43,81 @@ The competition uses AWS Session Manager (no SSH keys). Follow the [Roostoo Hack
 
 Once connected to your EC2 instance via Session Manager:
 
-```bash
-# 1. Install system dependencies
-sudo apt-get update -y
-sudo apt-get install -y python3.11 python3.11-venv git curl tmux
+#### Step 1 — Install system dependencies
 
-# 2. Install uv (Python package manager)
+```bash
+# Ubuntu / Debian
+sudo apt-get update -y && sudo apt-get install -y python3 python3-venv git curl tmux
+
+# Amazon Linux 2023 (if apt-get not found)
+sudo dnf install -y python3.11 python3.11-pip git tmux && curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+#### Step 2 — Install uv and clone repo
+
+```bash
 curl -LsSf https://astral.sh/uv/install.sh | sh
 export PATH="$HOME/.local/bin:$PATH"
 echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
 
-# 3. Clone the repo
 cd ~
 git clone https://github.com/qunzhongwang/trading_competition.git
 cd trading_competition
+```
 
-# 4. Create virtual environment and install dependencies
+#### Step 3 — Install Python dependencies
+
+```bash
 uv venv .venv && source .venv/bin/activate && uv sync
+```
 
-# 5. Set API credentials
+#### Step 4 — Set API credentials
+
+```bash
 cat > .env << 'EOF'
 ROOSTOO_COMP_API_KEY=your_competition_key
 ROOSTOO_COMP_API_SECRET=your_competition_secret
 EOF
-
-# 6. Quick smoke test (paper mode, Ctrl+C after 1-2 minutes)
-python main.py
-
-# 7. Start the bot in a tmux session (persists after Session Manager disconnect)
-tmux new -s bot
-source .venv/bin/activate
-./scripts/start_competition.sh
-# Press Ctrl+B then D to detach from tmux (bot keeps running)
 ```
 
-`start_competition.sh` auto-restarts the bot up to 50 times on crash with backoff. For a quick one-off test without auto-restart, use `./scripts/run.sh roostoo` instead.
-
-**Reconnecting after Session Manager disconnect:**
+#### Step 5 — Quick smoke test (optional)
 
 ```bash
-# Re-attach to the running bot
-tmux attach -t bot
+source .venv/bin/activate
+python main.py --mode roostoo
+# Watch for "Roostoo USD balance: $1000000.00" in logs
+# Ctrl+C after confirming no errors
+```
 
-# If tmux session died, restart:
+#### Step 6 — Start bot in tmux (keeps running after disconnect)
+
+```bash
+tmux new -s bot
+cd ~/trading_competition && ./scripts/start_competition.sh
+# Bot is now running. Detach with: Ctrl+B then D
+```
+
+The `start_competition.sh` script handles everything: loads `.env`, activates the virtualenv, validates API keys, and auto-restarts on crash (up to 50 times with 30s backoff).
+
+#### Reconnecting after Session Manager disconnect
+
+```bash
+tmux attach -t bot
+```
+
+If the tmux session died:
+
+```bash
 cd ~/trading_competition
 tmux new -s bot
-source .venv/bin/activate
 ./scripts/start_competition.sh
 ```
 
-**Monitoring (in a second tmux window):**
+#### Monitoring (open a second tmux window with Ctrl+B then C)
 
 ```bash
-# Inside tmux, press Ctrl+B then C to open a new window
 tail -f ~/trading_competition/logs/trading_roostoo_*.log    # main logs
 tail -f ~/trading_competition/logs/trades_*.jsonl            # trade events
-
-# Switch between tmux windows: Ctrl+B then N (next) / P (previous)
 ```
 
 **Useful tmux commands:**

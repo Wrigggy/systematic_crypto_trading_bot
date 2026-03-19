@@ -2,8 +2,9 @@
 # Start the trading bot in competition (Roostoo) mode.
 # Uses Binance WS for data, Roostoo REST for execution.
 #
-# Required env vars: ROOSTOO_API_KEY, ROOSTOO_API_SECRET
-# Optional: BINANCE_API_KEY, BINANCE_API_SECRET (for authenticated WS)
+# Required env vars (either pair):
+#   ROOSTOO_COMP_API_KEY + ROOSTOO_COMP_API_SECRET  (competition)
+#   ROOSTOO_API_KEY + ROOSTOO_API_SECRET             (testing)
 
 set -euo pipefail
 
@@ -16,6 +17,14 @@ if [ -f .env ]; then
     set -a
     source .env
     set +a
+fi
+
+# Activate virtualenv
+if [ -f .venv/bin/activate ]; then
+    source .venv/bin/activate
+else
+    echo "ERROR: .venv not found. Run: uv venv .venv && uv sync"
+    exit 1
 fi
 
 # Validate required env vars (either COMP or regular keys)
@@ -35,13 +44,13 @@ echo "Mode: roostoo"
 echo "Time: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
 echo "========================================="
 
-# Run with auto-restart on crash (max 5 restarts with backoff)
+# Run with auto-restart on crash (max 50 restarts with backoff)
 MAX_RESTARTS=50
 RESTART_COUNT=0
 BACKOFF=30
 
 while [ $RESTART_COUNT -lt $MAX_RESTARTS ]; do
-    if uv run python main.py --mode roostoo; then
+    if python main.py --mode roostoo; then
         echo "Bot exited cleanly"
         break
     else
