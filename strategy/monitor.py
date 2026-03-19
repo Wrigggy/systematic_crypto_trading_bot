@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from datetime import datetime, timezone
 from typing import Dict, Optional, Set
 
@@ -76,6 +77,10 @@ class StrategyMonitor:
 
         # Day boundary tracking for circuit breaker / tracker daily reset
         self._last_trading_date: Optional[str] = None
+
+        # Time-based periodic logging (wall clock, not iteration count)
+        self._last_status_log: float = 0.0
+        self._status_log_interval: float = 300.0  # 5 minutes
 
         # ICIR tracking: store previous factors per symbol for online learning
         self._prev_factors: Dict[str, list] = {}
@@ -267,8 +272,10 @@ class StrategyMonitor:
         if self._risk_shield.check_circuit_breaker(self._tracker):
             await self._liquidate_all()
 
-        # Periodic logging
-        if iteration % 5 == 0:
+        # Periodic logging (time-based, not iteration-based)
+        now = time.monotonic()
+        if now - self._last_status_log >= self._status_log_interval:
+            self._last_status_log = now
             snap = self._tracker.snapshot()
             holdings = [
                 f"{p.symbol}:{p.quantity:.4f}@{p.current_price:.2f}"
