@@ -27,6 +27,9 @@ else
     exit 1
 fi
 
+# Use venv python explicitly to avoid system python confusion
+PYTHON="$PROJECT_DIR/.venv/bin/python3"
+
 # Validate required env vars (either COMP or regular keys)
 if [ -z "${ROOSTOO_COMP_API_KEY:-}${ROOSTOO_API_KEY:-}" ] || [ -z "${ROOSTOO_COMP_API_SECRET:-}${ROOSTOO_API_SECRET:-}" ]; then
     echo "ERROR: Roostoo API credentials must be set (either ROOSTOO_COMP_* or ROOSTOO_*)"
@@ -50,7 +53,7 @@ RESTART_COUNT=0
 BACKOFF=30
 
 while [ $RESTART_COUNT -lt $MAX_RESTARTS ]; do
-    if python main.py --mode roostoo; then
+    if $PYTHON main.py --mode roostoo; then
         echo "Bot exited cleanly"
         break
     else

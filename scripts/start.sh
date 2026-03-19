@@ -26,6 +26,9 @@ else
     exit 1
 fi
 
+# Use venv python explicitly to avoid system python confusion
+PYTHON="$PROJECT_DIR/.venv/bin/python3"
+
 MAX_RESTARTS=50
 RESTART_DELAY=5
 count=0
@@ -38,7 +41,7 @@ while [ $count -lt $MAX_RESTARTS ]; do
     LOGFILE="$LOG_DIR/bot_$(date +%Y%m%d_%H%M%S).log"
     echo "[$(date)] Starting run #$((count+1))... logging to $LOGFILE"
 
-    if python main.py "$@" 2>&1 | tee -a "$LOGFILE"; then
+    if $PYTHON main.py "$@" 2>&1 | tee -a "$LOGFILE"; then
         echo "[$(date)] Bot exited cleanly."
         break
     else

@@ -16,38 +16,38 @@ echo ""
 
 # ── Transformer variants ──
 echo "[1/6] tf_4L_d64 launching..."
-python -m models.train $COMMON \
+.venv/bin/python3 -m models.train $COMMON \
   --model-type transformer --num-layers 4 --d-model 64 --nhead 4 --d-ff 256 \
   --wandb-name "tf_4L_d64_$(date +%H%M%S)" \
   > "$LOGDIR/tf_4L_d64.log" 2>&1 &
 
 echo "[2/6] tf_6L_d64 launching..."
-python -m models.train $COMMON \
+.venv/bin/python3 -m models.train $COMMON \
   --model-type transformer --num-layers 6 --d-model 64 --nhead 4 --d-ff 256 \
   --wandb-name "tf_6L_d64_$(date +%H%M%S)" \
   > "$LOGDIR/tf_6L_d64.log" 2>&1 &
 
 echo "[3/6] tf_8L_d64 launching..."
-python -m models.train $COMMON \
+.venv/bin/python3 -m models.train $COMMON \
   --model-type transformer --num-layers 8 --d-model 64 --nhead 4 --d-ff 256 \
   --wandb-name "tf_8L_d64_$(date +%H%M%S)" \
   > "$LOGDIR/tf_8L_d64.log" 2>&1 &
 
 # ── LSTM variants ──
 echo "[4/6] lstm_h64_2L launching..."
-python -m models.train $COMMON \
+.venv/bin/python3 -m models.train $COMMON \
   --model-type lstm --hidden-size 64 --num-layers 2 \
   --wandb-name "lstm_h64_2L_$(date +%H%M%S)" \
   > "$LOGDIR/lstm_h64_2L.log" 2>&1 &
 
 echo "[5/6] lstm_h128_2L launching..."
-python -m models.train $COMMON \
+.venv/bin/python3 -m models.train $COMMON \
   --model-type lstm --hidden-size 128 --num-layers 2 \
   --wandb-name "lstm_h128_2L_$(date +%H%M%S)" \
   > "$LOGDIR/lstm_h128_2L.log" 2>&1 &
 
 echo "[6/6] lstm_h256_2L launching..."
-python -m models.train $COMMON \
+.venv/bin/python3 -m models.train $COMMON \
   --model-type lstm --hidden-size 256 --num-layers 2 \
   --wandb-name "lstm_h256_2L_$(date +%H%M%S)" \
   > "$LOGDIR/lstm_h256_2L.log" 2>&1 &

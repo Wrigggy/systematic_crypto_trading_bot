@@ -22,4 +22,4 @@ echo "Config: $CONFIG"
 echo "Press Ctrl+C to stop"
 echo ""
 
-python main.py --config "$CONFIG" --mode paper "$@"
+.venv/bin/python3 main.py --config "$CONFIG" --mode paper "$@"

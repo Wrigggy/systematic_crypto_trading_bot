@@ -17,7 +17,7 @@ echo ""
 run_one() {
   local name="$1"; shift
   echo ">>> $name launching..."
-  python -m models.train $COMMON --wandb-name "$name" "$@" 2>&1 | tee "$LOGDIR/${name}.log"
+  .venv/bin/python3 -m models.train $COMMON --wandb-name "$name" "$@" 2>&1 | tee "$LOGDIR/${name}.log"
   echo ""
 }
 

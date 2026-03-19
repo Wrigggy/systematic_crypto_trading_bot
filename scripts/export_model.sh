@@ -31,7 +31,7 @@ echo "Seq len:  $SEQ_LEN"
 echo "Features: $N_FEATURES"
 echo ""
 
-python -c "
+.venv/bin/python3 -c "
 import torch
 from models.lstm_model import LSTMAlphaModel
 from models.train import export_onnx

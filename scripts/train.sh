@@ -37,7 +37,7 @@ echo "AMP:        ${USE_AMP:-disabled}"
 echo "Compile:    ${USE_COMPILE:-disabled}"
 echo ""
 
-python -m models.train \
+.venv/bin/python3 -m models.train \
     --symbols $SYMBOLS \
     --synthetic \
     --n-candles "$N_CANDLES" \

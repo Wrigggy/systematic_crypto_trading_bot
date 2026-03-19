@@ -4,4 +4,4 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 [ -f .env ] && { set -a; source .env; set +a; }
 source .venv/bin/activate
-exec python main.py --mode "${1:-paper}" "${@:2}"
+exec .venv/bin/python3 main.py --mode "${1:-paper}" "${@:2}"

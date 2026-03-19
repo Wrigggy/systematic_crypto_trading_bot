@@ -24,7 +24,7 @@ echo "Candles:  $N_CANDLES per symbol"
 echo "Seed:     $SEED"
 echo ""
 
-python -c "
+.venv/bin/python3 -c "
 import csv
 from pathlib import Path
 from models.train import generate_synthetic_ohlcv, SYNTHETIC_PRESETS
