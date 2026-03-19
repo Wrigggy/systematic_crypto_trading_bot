@@ -21,7 +21,7 @@ from typing import Optional
 
 import yaml
 
-from core.models import StrategyState
+from core.models import Order, OrderType, Side, StrategyState
 from data.buffer import LiveBuffer
 from data.connector import WSConnector, BinanceSupplementaryFeed, prefetch_candles
 from data.sim_feed import SimulatedFeed
@@ -372,6 +372,31 @@ async def main(config: dict) -> None:
                 logger.info("Recovered position: %s qty=%.6f @ $%.2f", symbol, qty, ticker_price)
             else:
                 logger.warning("Could not get ticker for %s, skipping position recovery", symbol)
+
+        # 11c. Seed trade — buy $1 of BTC to ensure participation record
+        has_any_position = any(
+            pos.quantity > 0 for pos in tracker.snapshot().positions
+        )
+        if not has_any_position:
+            seed_symbol = "BTC/USDT"
+            seed_price = await executor.get_ticker(seed_symbol)
+            if seed_price and seed_price > 0:
+                seed_qty = 1.0 / seed_price  # $1 worth
+                seed_order = Order(
+                    symbol=seed_symbol,
+                    side=Side.BUY,
+                    order_type=OrderType.MARKET,
+                    quantity=seed_qty,
+                )
+                result = await order_manager.submit(seed_order)
+                logger.info(
+                    "Seed trade: BUY $1 of %s qty=%.8f — status=%s",
+                    seed_symbol,
+                    seed_qty,
+                    result.status.value,
+                )
+            else:
+                logger.warning("Could not get BTC ticker for seed trade")
 
     # ── Graceful Shutdown ──
     shutdown_event = asyncio.Event()
