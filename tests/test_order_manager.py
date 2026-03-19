@@ -32,8 +32,10 @@ class TestSubmit:
     async def test_market_order_fills(self, manager, buffer, tracker):
         await buffer.push_candle(make_candle(close=100.0))
         order = Order(
-            symbol="BTC/USDT", side=Side.BUY,
-            order_type=OrderType.MARKET, quantity=1.0,
+            symbol="BTC/USDT",
+            side=Side.BUY,
+            order_type=OrderType.MARKET,
+            quantity=1.0,
         )
         result = await manager.submit(order)
         assert result.status == OrderStatus.FILLED
@@ -44,8 +46,11 @@ class TestSubmit:
     async def test_limit_order_tracked(self, manager, buffer):
         await buffer.push_candle(make_candle(close=110.0))
         order = Order(
-            symbol="BTC/USDT", side=Side.BUY,
-            order_type=OrderType.LIMIT, quantity=1.0, price=100.0,
+            symbol="BTC/USDT",
+            side=Side.BUY,
+            order_type=OrderType.LIMIT,
+            quantity=1.0,
+            price=100.0,
         )
         result = await manager.submit(order)
         assert result.status == OrderStatus.SUBMITTED
@@ -61,8 +66,10 @@ class TestCallbacks:
         manager.register_fill_callback(lambda o: fills.append(o))
 
         order = Order(
-            symbol="BTC/USDT", side=Side.BUY,
-            order_type=OrderType.MARKET, quantity=1.0,
+            symbol="BTC/USDT",
+            side=Side.BUY,
+            order_type=OrderType.MARKET,
+            quantity=1.0,
         )
         await manager.submit(order)
         assert len(fills) == 1
@@ -76,8 +83,10 @@ class TestCallbacks:
         manager.register_fill_callback(lambda o: results_b.append(o.symbol))
 
         order = Order(
-            symbol="BTC/USDT", side=Side.BUY,
-            order_type=OrderType.MARKET, quantity=1.0,
+            symbol="BTC/USDT",
+            side=Side.BUY,
+            order_type=OrderType.MARKET,
+            quantity=1.0,
         )
         await manager.submit(order)
         assert results_a == ["BTC/USDT"]
@@ -89,8 +98,11 @@ class TestCancel:
     async def test_cancel_removes_from_active(self, manager, buffer):
         await buffer.push_candle(make_candle(close=110.0))
         order = Order(
-            symbol="BTC/USDT", side=Side.BUY,
-            order_type=OrderType.LIMIT, quantity=1.0, price=100.0,
+            symbol="BTC/USDT",
+            side=Side.BUY,
+            order_type=OrderType.LIMIT,
+            quantity=1.0,
+            price=100.0,
         )
         submitted = await manager.submit(order)
         assert manager.has_pending
