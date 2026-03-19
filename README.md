@@ -33,7 +33,21 @@ cp .env.example .env
 The rule-based alpha engine works out of the box with no training. If you want to use LSTM or ensemble mode:
 
 ```bash
-python -m models.train --synthetic --symbols BTC/USDT --device auto
+.venv/bin/python3 -m models.train --synthetic --symbols BTC/USDT --device auto
+```
+
+#### Running Commands
+
+All scripts use `.venv/bin/python3` explicitly, so they work regardless of system Python configuration. When running commands manually, either activate the venv first or use the full path:
+
+```bash
+# Option A: activate venv first
+source .venv/bin/activate
+python3 main.py --mode roostoo
+
+# Option B: use venv python directly (no activation needed)
+.venv/bin/python3 main.py --mode roostoo
+.venv/bin/python3 -m models.train --synthetic --device auto
 ```
 
 #### Switching Alpha Engine
@@ -41,9 +55,9 @@ python -m models.train --synthetic --symbols BTC/USDT --device auto
 Switch engine without editing config files — use the `--engine` CLI flag:
 
 ```bash
-python main.py --mode roostoo --engine rule_based   # default, no model needed
-python main.py --mode roostoo --engine lstm          # requires trained model
-python main.py --mode roostoo --engine ensemble      # 50/50 rule_based + lstm
+.venv/bin/python3 main.py --mode roostoo --engine rule_based   # default, no model needed
+.venv/bin/python3 main.py --mode roostoo --engine lstm          # requires trained model
+.venv/bin/python3 main.py --mode roostoo --engine ensemble      # 50/50 rule_based + lstm
 ```
 
 The `start_competition.sh` script passes extra args through, so you can also do:
@@ -106,7 +120,7 @@ EOF
 
 ```bash
 source .venv/bin/activate
-python main.py --mode roostoo
+python3 main.py --mode roostoo
 # Watch for "Roostoo USD balance: $1000000.00" in logs
 # Ctrl+C after confirming no errors
 ```
@@ -186,8 +200,8 @@ Switch between tmux windows: `Ctrl+B` then `N` (next) / `P` (previous).
 | Install dependencies | `uv sync` | |
 | Set API credentials in `.env` | Use `ROOSTOO_COMP_*` keys for competition | |
 | Choose alpha engine | `--engine rule_based` (default) / `lstm` / `ensemble` via CLI | |
-| Train model (if using LSTM) | `python -m models.train --synthetic --device auto` | |
-| Roostoo test run | `python main.py --mode roostoo` — verify orders execute | |
+| Train model (if using LSTM) | `.venv/bin/python3 -m models.train --synthetic --device auto` | |
+| Roostoo test run | `.venv/bin/python3 main.py --mode roostoo` — verify orders execute | |
 | Run tests | `pytest` — all 233 tests should pass | |
 | Deploy to EC2 | Connect via Session Manager, clone repo, `uv sync` | |
 | Set EC2 API keys | Create `.env` with competition keys | |
@@ -208,7 +222,7 @@ The `.env` file supports two sets of Roostoo credentials. Competition keys take 
 ```bash
 # No API keys needed — generates synthetic price data
 uv venv .venv && source .venv/bin/activate && uv sync
-python main.py
+.venv/bin/python3 main.py
 ```
 
 Press `Ctrl+C` to stop — prints a final PnL report with risk metrics on shutdown.
@@ -281,7 +295,7 @@ All scripts live in `scripts/` with comments and configurable env vars:
 ./scripts/train.sh              # Train LSTM with synthetic data
 ./scripts/test.sh               # Run tests with coverage
 ./scripts/export_model.sh       # Export .pt → .onnx
-python scripts/upload_model_to_hf.py --repo-id USER/REPO  # Push artifacts to Hugging Face
+.venv/bin/python3 scripts/upload_model_to_hf.py --repo-id USER/REPO  # Push artifacts to Hugging Face
 ./scripts/generate_data.sh      # Generate synthetic CSV data
 ```
 
@@ -438,7 +452,7 @@ trading-competition/
 ### Paper Mode (default)
 
 ```bash
-python main.py
+.venv/bin/python3 main.py
 ```
 
 - Generates synthetic candles via geometric Brownian motion
@@ -454,7 +468,7 @@ cp .env.example .env
 # Edit .env with your credentials
 
 # Run
-python main.py --mode roostoo
+.venv/bin/python3 main.py --mode roostoo
 ```
 
 - Connects to **Binance WebSocket** for real-time 1m candle data (65 symbols)
@@ -467,7 +481,7 @@ python main.py --mode roostoo
 ### Live Mode
 
 ```bash
-python main.py --mode live
+.venv/bin/python3 main.py --mode live
 ```
 
 - Connects to Binance via WebSocket for real-time kline data
@@ -492,19 +506,19 @@ Metrics are logged periodically during trading and in the final shutdown report.
 
 ```bash
 # Train with synthetic data (no API needed — works anywhere)
-python -m models.train --synthetic --symbols BTC/USDT --device auto
+.venv/bin/python3 -m models.train --synthetic --symbols BTC/USDT --device auto
 
 # Train with real data from Binance (recommended: 90 days for stable feature distributions)
-python -m models.train --symbols BTC/USDT --days 90 --device auto
+.venv/bin/python3 -m models.train --symbols BTC/USDT --days 90 --device auto
 
 # GPU training with mixed precision and torch.compile
-python -m models.train --synthetic --symbols BTC/USDT ETH/USDT --device cuda --amp --compile
+.venv/bin/python3 -m models.train --synthetic --symbols BTC/USDT ETH/USDT --device cuda --amp --compile
 
 # Walk-forward validation with recency weighting
-python -m models.train --symbols BTC/USDT --days 90 --walk-forward --recency-half-life 35 --device cuda --amp
+.venv/bin/python3 -m models.train --symbols BTC/USDT --days 90 --walk-forward --recency-half-life 35 --device cuda --amp
 
 # With wandb experiment tracking
-python -m models.train --synthetic --device cuda --amp --compile --wandb --wandb-tags test
+.venv/bin/python3 -m models.train --synthetic --device cuda --amp --compile --wandb --wandb-tags test
 
 # Or use the script
 ./scripts/train.sh
@@ -798,7 +812,7 @@ Files rotate at 10MB with 5 backups.
 Training integrates with [Weights & Biases](https://wandb.ai) via `--wandb`:
 
 ```bash
-python -m models.train --synthetic --device cuda --amp --compile --wandb --wandb-tags test
+.venv/bin/python3 -m models.train --synthetic --device cuda --amp --compile --wandb --wandb-tags test
 ```
 
 Runs are auto-grouped by experiment config like: `cuda_e50_10k_amp_compile_0314`. Tags distinguish `test` vs `deploy` runs. Metrics logged per epoch: train/val loss, learning rate, epoch time. Override defaults with `--wandb-entity`, `--wandb-project`, `--wandb-group`, `--wandb-name`.
