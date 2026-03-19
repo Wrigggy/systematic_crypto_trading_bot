@@ -39,7 +39,7 @@ class LiveBuffer:
         self._last_candle_time: Dict[str, float] = {}
         # Supplementary data staleness
         self._supp_last_update: Dict[str, float] = {}
-        self._supp_stale_threshold: float = 300.0  # 5 minutes
+        self._supp_stale_threshold: float = 600.0  # 10 minutes (taker polls every 5min)
 
     async def push_tick(self, tick: Tick) -> None:
         async with self._lock:

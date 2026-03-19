@@ -70,10 +70,13 @@ class StrategyMonitor:
         # Register fill callback for strategy logic
         self._order_manager.register_fill_callback(self._on_order_event)
 
-        # Min candles before we start trading
-        self._warmup_candles = extractor.min_candles + config.get("alpha", {}).get(
-            "seq_len", 30
-        )
+        # Min candles before we start trading (engine-aware)
+        engine_type = config.get("alpha", {}).get("engine", "rule_based")
+        seq_len = config.get("alpha", {}).get("seq_len", 30)
+        if engine_type in ("lstm", "transformer", "ensemble"):
+            self._warmup_candles = extractor.min_candles + seq_len
+        else:
+            self._warmup_candles = extractor.min_candles
 
         # Day boundary tracking for circuit breaker / tracker daily reset
         self._last_trading_date: Optional[str] = None

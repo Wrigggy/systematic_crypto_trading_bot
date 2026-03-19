@@ -196,12 +196,16 @@ class BinanceSupplementaryFeed:
                             f"{self.FUTURES_REST_URL}/futures/data/takerlongshortRatio"
                             f"?symbol={api_symbol}&period=5m&limit=1"
                         )
-                        async with session.get(url) as resp:
-                            if resp.status == 200:
-                                data = await resp.json()
-                                if data:
-                                    ratio = float(data[0].get("buySellRatio", 1.0))
-                                    await self._buffer.push_taker_ratio(symbol, ratio)
+                        try:
+                            async with session.get(url) as resp:
+                                if resp.status == 200:
+                                    data = await resp.json()
+                                    if data:
+                                        ratio = float(data[0].get("buySellRatio", 1.0))
+                                        await self._buffer.push_taker_ratio(symbol, ratio)
+                                # Silently skip symbols without futures data (404, empty)
+                        except Exception:
+                            pass  # per-symbol failure is fine, don't spam logs
             except Exception as e:
                 logger.warning("Taker ratio poll error: %s", e)
             await asyncio.sleep(300)  # 5 minutes
@@ -212,3 +216,59 @@ class BinanceSupplementaryFeed:
             if sym.replace("/", "") == raw_symbol:
                 return sym
         return ""
+
+
+async def prefetch_candles(
+    symbols: list, buffer: LiveBuffer, n_candles: int = 300
+) -> None:
+    """Fetch recent historical 1m candles from Binance REST to pre-fill the buffer.
+
+    Eliminates warmup wait on startup. Uses public endpoint (no API key needed).
+    """
+    import aiohttp
+
+    BINANCE_KLINES_URL = "https://api.binance.com/api/v3/klines"
+    semaphore = asyncio.Semaphore(10)  # max 10 concurrent requests
+
+    async def fetch_one(session: aiohttp.ClientSession, symbol: str) -> int:
+        api_symbol = symbol.replace("/", "")
+        params = {"symbol": api_symbol, "interval": "1m", "limit": n_candles}
+        async with semaphore:
+            try:
+                async with session.get(BINANCE_KLINES_URL, params=params) as resp:
+                    if resp.status != 200:
+                        logger.warning("Prefetch failed for %s: HTTP %d", symbol, resp.status)
+                        return 0
+                    data = await resp.json()
+                    count = 0
+                    for k in data:
+                        candle = OHLCV(
+                            symbol=symbol,
+                            open=float(k[1]),
+                            high=float(k[2]),
+                            low=float(k[3]),
+                            close=float(k[4]),
+                            volume=float(k[5]),
+                            timestamp=datetime.utcfromtimestamp(k[0] / 1000),
+                            is_closed=True,
+                        )
+                        await buffer.push_candle(candle)
+                        count += 1
+                    return count
+            except Exception as e:
+                logger.warning("Prefetch error for %s: %s", symbol, e)
+                return 0
+
+    async with aiohttp.ClientSession(
+        timeout=aiohttp.ClientTimeout(total=30)
+    ) as session:
+        tasks = [fetch_one(session, sym) for sym in symbols]
+        results = await asyncio.gather(*tasks)
+
+    total = sum(results)
+    success = sum(1 for r in results if r > 0)
+    logger.info(
+        "Prefetched %d candles for %d/%d symbols", total, success, len(symbols)
+    )
+    # Clear the event so monitor doesn't immediately wake on stale prefetch data
+    buffer._event.clear()

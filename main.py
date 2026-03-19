@@ -23,7 +23,7 @@ import yaml
 
 from core.models import StrategyState
 from data.buffer import LiveBuffer
-from data.connector import WSConnector, BinanceSupplementaryFeed
+from data.connector import WSConnector, BinanceSupplementaryFeed, prefetch_candles
 from data.sim_feed import SimulatedFeed
 from execution.executor import LiveExecutor
 from execution.order_manager import OrderManager
@@ -185,6 +185,20 @@ async def main(config: dict) -> None:
     else:
         # Both "live" and "roostoo" modes use Binance WS for market data
         feed = WSConnector(config, buffer)
+
+        # Prefetch historical candles to eliminate warmup wait
+        from features.extractor import FeatureExtractor as _FE
+
+        _tmp_extractor = _FE(config.get("features", {}))
+        engine_type = config.get("alpha", {}).get("engine", "rule_based")
+        seq_len = config.get("alpha", {}).get("seq_len", 30)
+        if engine_type in ("lstm", "transformer", "ensemble"):
+            n_prefetch = _tmp_extractor.min_candles + seq_len + 10  # +10 buffer
+        else:
+            n_prefetch = _tmp_extractor.min_candles + 10
+        n_prefetch = min(n_prefetch, 1000)  # Binance limit
+        logger.info("Prefetching %d candles per symbol from Binance REST...", n_prefetch)
+        await prefetch_candles(config.get("symbols", []), buffer, n_candles=n_prefetch)
 
     # 3. Trade logger
     trade_logger = TradeLogger()
@@ -485,11 +499,19 @@ if __name__ == "__main__":
     parser.add_argument(
         "--mode", default=None, help="Override mode: paper, live, or roostoo"
     )
+    parser.add_argument(
+        "--engine",
+        choices=["rule_based", "lstm", "ensemble"],
+        default=None,
+        help="Override alpha engine: rule_based, lstm, or ensemble",
+    )
     args = parser.parse_args()
 
     config = load_config(args.config)
     if args.mode:
         config["mode"] = args.mode
+    if args.engine:
+        config.setdefault("alpha", {})["engine"] = args.engine
 
     _apply_env_overrides(config)
     setup_logging(config.get("mode", "paper"))

@@ -93,8 +93,8 @@ class TestFullPipeline:
         config = _fast_config()
         monitor, buffer, tracker = _build_pipeline(config)
 
-        # Push fewer candles than warmup requires (58)
-        candles = make_candle_series(30, start_price=100.0, trend=0.5)
+        # Push fewer candles than warmup requires (rule_based warmup = min_candles = 28)
+        candles = make_candle_series(15, start_price=100.0, trend=0.5)
         await _feed_candles(buffer, candles)
 
         # Run one iteration
