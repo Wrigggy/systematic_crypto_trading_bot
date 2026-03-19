@@ -268,7 +268,7 @@ class StrategyMonitor:
             await self._liquidate_all()
 
         # Periodic logging
-        if iteration % 10 == 0:
+        if iteration % 5 == 0:
             snap = self._tracker.snapshot()
             holdings = [
                 f"{p.symbol}:{p.quantity:.4f}@{p.current_price:.2f}"
