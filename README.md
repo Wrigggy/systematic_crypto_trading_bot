@@ -34,7 +34,23 @@ The rule-based alpha engine works out of the box with no training. If you want t
 
 ```bash
 python -m models.train --synthetic --symbols BTC/USDT --device auto
-# Then set alpha.engine to "lstm" or "ensemble" in config/default.yaml
+```
+
+#### Switching Alpha Engine
+
+Switch engine without editing config files — use the `--engine` CLI flag:
+
+```bash
+python main.py --mode roostoo --engine rule_based   # default, no model needed
+python main.py --mode roostoo --engine lstm          # requires trained model
+python main.py --mode roostoo --engine ensemble      # 50/50 rule_based + lstm
+```
+
+The `start_competition.sh` script passes extra args through, so you can also do:
+
+```bash
+# In start_competition.sh, change the python line, or just run directly:
+./scripts/run.sh roostoo --engine ensemble
 ```
 
 ### Deploy to AWS EC2 via Session Manager
@@ -113,12 +129,36 @@ tmux new -s bot
 ./scripts/start_competition.sh
 ```
 
-#### Monitoring (open a second tmux window with Ctrl+B then C)
+#### Monitoring (open a second tmux window)
+
+While the bot is running in tmux window 0, press `Ctrl+B` then `C` to create a new window for monitoring:
 
 ```bash
-tail -f ~/trading_competition/logs/trading_roostoo_*.log    # main logs
-tail -f ~/trading_competition/logs/trades_*.jsonl            # trade events
+# Quick status check — shows NAV, positions, recent trades, errors
+cd ~/trading_competition
+./scripts/status.sh
+
+# Example output:
+# === Bot Status (from logs/trading_roostoo_20260321_080000.log) ===
+#
+# --- Portfolio ---
+# Iter 85 | NAV=1000050.00 | Cash=950000.00 | PnL=50.00 | DD=0.00% | Holdings=BTC/USDT:0.5000@65000.00
+#
+# --- Risk Metrics ---
+# Risk Metrics | Sharpe=0.500 | Sortino=0.800 | Calmar=1.200 | Composite=0.830 | Return=0.01% | MaxDD=0.00%
+#
+# --- Recent Trades (last 5) ---
+# [BTC/USDT] FLAT → LONG_PENDING: alpha=0.750, qty=0.005000, order=LIMIT
+# BUY filled: BTC/USDT qty=0.005000 @ 65000.00, fee=0.33, cash=999674.67
 ```
+
+```bash
+# Live log streaming
+tail -f ~/trading_competition/logs/trading_roostoo_*.log    # main logs
+tail -f ~/trading_competition/logs/trades_*.jsonl            # trade events (JSON)
+```
+
+Switch between tmux windows: `Ctrl+B` then `N` (next) / `P` (previous).
 
 **Useful tmux commands:**
 
@@ -128,6 +168,7 @@ tail -f ~/trading_competition/logs/trades_*.jsonl            # trade events
 | New window | `Ctrl+B`, then `C` |
 | Next/prev window | `Ctrl+B`, then `N` / `P` |
 | List sessions | `tmux ls` |
+| Re-attach | `tmux attach -t bot` |
 | Kill session | `tmux kill-session -t bot` |
 
 ### Pre-Competition Checklist
@@ -136,16 +177,16 @@ tail -f ~/trading_competition/logs/trades_*.jsonl            # trade events
 |------|-----------------|--------|
 | Install dependencies | `uv sync` | |
 | Set API credentials in `.env` | Use `ROOSTOO_COMP_*` keys for competition | |
-| Choose alpha engine | Set `alpha.engine` in `config/default.yaml` (`rule_based` / `lstm` / `ensemble`) | |
+| Choose alpha engine | `--engine rule_based` (default) / `lstm` / `ensemble` via CLI | |
 | Train model (if using LSTM) | `python -m models.train --synthetic --device auto` | |
-| Paper test run (5+ min) | `python main.py` — verify no crashes, check logs | |
 | Roostoo test run | `python main.py --mode roostoo` — verify orders execute | |
 | Run tests | `pytest` — all 233 tests should pass | |
 | Deploy to EC2 | Connect via Session Manager, clone repo, `uv sync` | |
 | Set EC2 API keys | Create `.env` with competition keys | |
 | Start bot in tmux | `tmux new -s bot` then `./scripts/start_competition.sh` | |
 | Detach tmux | `Ctrl+B` then `D` — bot keeps running | |
-| Monitor first hour | `tail -f logs/trading_roostoo_*.log` — watch for fills and risk metrics | |
+| Check status | `Ctrl+B` then `C` (new window), then `./scripts/status.sh` | |
+| Monitor logs | `tail -f logs/trading_roostoo_*.log` | |
 
 ### Credential Priority
 
