@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import time
 from datetime import datetime, timezone
-from typing import Dict, Optional, Set
+from typing import TYPE_CHECKING, Dict, Optional, Set
 
 from core.models import OHLCV, Order, OrderStatus, StrategyState
 from data.buffer import LiveBuffer
@@ -14,6 +14,9 @@ from models.inference import AlphaEngine
 from risk.risk_shield import RiskShield
 from risk.tracker import PortfolioTracker
 from strategy.logic import StrategyLogic
+
+if TYPE_CHECKING:
+    from execution.base import BaseExecutor
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +41,7 @@ class StrategyMonitor:
         multi_resampler: Optional[MultiResampler] = None,
         trade_tracker=None,
         icir_tracker=None,
+        executor: Optional["BaseExecutor"] = None,
     ):
         self._config = config
         self._buffer = buffer
@@ -51,6 +55,7 @@ class StrategyMonitor:
         self._multi_resampler = multi_resampler
         self._trade_tracker = trade_tracker
         self._icir_tracker = icir_tracker
+        self._executor = executor
 
         # Multi-TF timeframes to fetch for alpha filter
         alpha_cfg = config.get("alpha", {})
@@ -294,6 +299,18 @@ class StrategyMonitor:
                 snap.drawdown * 100,
                 holdings or "none",
             )
+
+            # Roostoo mode: fetch live balance to verify API connectivity
+            if self._executor is not None and hasattr(self._executor, "get_balance"):
+                try:
+                    roostoo_bal = await self._executor.get_balance()
+                    if roostoo_bal:
+                        bal_parts = [f"{a}:{v:.4f}" for a, v in roostoo_bal.items()]
+                        logger.info("Roostoo balance | %s", " | ".join(bal_parts))
+                    else:
+                        logger.warning("Roostoo balance fetch returned empty")
+                except Exception:
+                    logger.warning("Roostoo balance fetch failed", exc_info=True)
 
     async def _liquidate_all(self) -> None:
         """Emergency liquidation: sell all positions."""

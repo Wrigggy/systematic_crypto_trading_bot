@@ -352,6 +352,7 @@ async def main(config: dict) -> None:
         multi_resampler=multi_resampler,
         trade_tracker=trade_tracker,
         icir_tracker=icir_tracker,
+        executor=executor,
     )
 
     # 11b. Position recovery on restart (Roostoo mode only)
