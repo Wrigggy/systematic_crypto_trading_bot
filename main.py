@@ -163,6 +163,20 @@ def _validate_config(config: dict) -> None:
         raise SystemExit(1)
 
 
+def _resolve_roostoo_starting_capital(
+    default_capital: float, balances: Optional[dict[str, float]]
+) -> float:
+    """Resolve the tracker cash baseline from a Roostoo balance snapshot.
+
+    If a balance snapshot is available, use free USD directly. This prevents the
+    portfolio tracker from booting with paper capital in competition mode.
+    When the balance request fails entirely, fall back to config capital.
+    """
+    if balances:
+        return float(balances.get("USD", 0.0))
+    return default_capital
+
+
 async def main(config: dict) -> None:
     mode = config.get("mode", "paper")
     logger.info("=== Trading Competition Framework ===")
@@ -209,6 +223,8 @@ async def main(config: dict) -> None:
 
     # 4. Executor
     paper_cfg = config.get("paper", {})
+    starting_capital = paper_cfg.get("initial_capital", 1000000.0)
+    balances: dict[str, float] = {}
     if mode == "paper":
         executor = SimExecutor(paper_cfg, buffer)
     elif mode == "roostoo":
@@ -220,9 +236,11 @@ async def main(config: dict) -> None:
 
         # Sync initial balance from Roostoo
         balances = await roostoo_exec.get_balance()
-        usd_balance = balances.get("USD", 0)
-        if usd_balance > 0:
-            logger.info("Roostoo USD balance: $%.2f", usd_balance)
+        if balances:
+            starting_capital = _resolve_roostoo_starting_capital(
+                starting_capital, balances
+            )
+            logger.info("Roostoo free USD balance: $%.2f", starting_capital)
         else:
             logger.warning(
                 "Could not fetch Roostoo balance, using config initial_capital"
@@ -259,7 +277,7 @@ async def main(config: dict) -> None:
             config["alpha"]["engine"] = "rule_based"
 
     # 7. Portfolio tracker
-    initial_capital = paper_cfg.get("initial_capital", 1000000.0)
+    initial_capital = starting_capital
     fee_bps = paper_cfg.get("fee_bps", 10.0)
     tracker = PortfolioTracker(initial_capital, fee_bps)
 

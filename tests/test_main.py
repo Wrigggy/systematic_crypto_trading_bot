@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from main import load_config
+from main import load_config, _resolve_roostoo_starting_capital
 
 
 class TestLoadConfig:
@@ -51,3 +51,21 @@ class TestLoadConfig:
         assert "max_portfolio_exposure" in risk
         assert "trailing_stop_pct" in risk
         assert "daily_drawdown_limit" in risk
+
+
+class TestRoostooStartingCapital:
+    def test_uses_free_usd_balance_when_available(self):
+        starting = _resolve_roostoo_starting_capital(
+            1_000_000.0, {"USD": 1250.5, "BTC": 0.1}
+        )
+        assert starting == pytest.approx(1250.5)
+
+    def test_allows_zero_usd_when_balance_snapshot_exists(self):
+        starting = _resolve_roostoo_starting_capital(
+            1_000_000.0, {"USD": 0.0, "BTC": 0.5}
+        )
+        assert starting == 0.0
+
+    def test_falls_back_to_config_capital_when_balance_fetch_failed(self):
+        starting = _resolve_roostoo_starting_capital(1_000_000.0, {})
+        assert starting == 1_000_000.0
