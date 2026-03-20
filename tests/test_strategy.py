@@ -79,6 +79,7 @@ def _bearish_observation(
 def _factor_snapshot(
     *,
     ts: datetime | None = None,
+    regime: str = "risk_on",
     entry_score: float = 0.75,
     exit_score: float = 0.0,
     blocker_score: float = 0.1,
@@ -90,7 +91,7 @@ def _factor_snapshot(
     return FactorSnapshot(
         symbol="BTC/USDT",
         timestamp=ts or datetime(2025, 1, 1),
-        regime="trend_following",
+        regime=regime,
         entry_score=entry_score,
         exit_score=exit_score,
         blocker_score=blocker_score,
@@ -259,6 +260,56 @@ class TestWrongSymbol:
 
 
 class TestFactorFirstStateMachine:
+    def test_risk_off_regime_blocks_new_entry(self, logic, snap_100k):
+        snapshot = _factor_snapshot(
+            regime="risk_off",
+            observations=[
+                _bullish_observation("trend_alignment", "price_structure"),
+                _bullish_observation("volume_confirmation", "flow"),
+            ],
+            supporting_factors=["trend_alignment", "volume_confirmation"],
+            blocker_score=0.1,
+        )
+
+        assert logic.on_factors(snapshot, snap_100k, current_price=100.0) is None
+        assert logic.state == StrategyState.FLAT
+
+    def test_neutral_regime_reduces_entry_size(self, default_config, snap_100k):
+        config = copy.deepcopy(default_config)
+        config["strategy"].update(
+            {
+                "confirmation_bars": 1,
+                "neutral_entry_size_multiplier": 0.5,
+            }
+        )
+        logic = StrategyLogic("BTC/USDT", config)
+        risk_on_snapshot = _factor_snapshot(
+            regime="risk_on",
+            observations=[
+                _bullish_observation("trend_alignment", "price_structure"),
+                _bullish_observation("volume_confirmation", "flow"),
+            ],
+            supporting_factors=["trend_alignment", "volume_confirmation"],
+        )
+        risk_on_intent = logic.on_factors(
+            risk_on_snapshot, snap_100k, current_price=100.0
+        )
+        assert risk_on_intent is not None
+
+        logic.force_flat()
+        snapshot = _factor_snapshot(
+            regime="neutral",
+            observations=[
+                _bullish_observation("trend_alignment", "price_structure"),
+                _bullish_observation("volume_confirmation", "flow"),
+            ],
+            supporting_factors=["trend_alignment", "volume_confirmation"],
+        )
+
+        intent = logic.on_factors(snapshot, snap_100k, current_price=100.0)
+        assert intent is not None
+        assert intent.quantity == pytest.approx(risk_on_intent.quantity * 0.5)
+
     def test_failed_breadth_does_not_count_toward_confirmation(
         self, default_config, snap_100k
     ):

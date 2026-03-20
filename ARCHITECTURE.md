@@ -197,8 +197,10 @@ while new_closed_candle:
 
 当前已经落地的因子包括：
 
+- `market_regime`
 - `trend_alignment`
 - `momentum_impulse`
+- `breakout_confirmation`
 - `volume_confirmation`
 - `liquidity_balance`
 - `perp_crowding`

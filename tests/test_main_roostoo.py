@@ -12,6 +12,7 @@ def _build_roostoo_config(default_config: dict) -> dict:
     config = copy.deepcopy(default_config)
     config["mode"] = "roostoo"
     config["symbols"] = ["BTC/USDT", "ETH/USDT"]
+    config.setdefault("strategy", {})["profile"] = "regime_trend_v1"
     config["exchange"] = {"name": "binance", "ws_url": "wss://example.invalid/ws"}
     config["roostoo"] = {
         "base_url": "https://mock-api.roostoo.com",
@@ -161,6 +162,7 @@ class TestMainRoostooMode:
 
         monitor = _FakeMonitor.created
         assert monitor is not None
+        assert monitor.config["strategy"]["profile"] == "regime_trend_v1"
         assert monitor.strategies["ETH/USDT"]._state == StrategyState.HOLDING
         assert monitor.strategies["ETH/USDT"]._entry_price == pytest.approx(3200.0)
         assert _FakeOrderManager.created is not None

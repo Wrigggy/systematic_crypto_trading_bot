@@ -22,6 +22,12 @@ def _feature_vector(**overrides) -> FeatureVector:
         volume_ratio=1.30,
         funding_rate=0.0001,
         taker_ratio=1.02,
+        raw={
+            "breakout_distance": 0.45,
+            "trend_slope": 0.0015,
+            "volume_zscore": 1.10,
+            "realized_vol_short": 0.009,
+        },
     )
     return base.model_copy(update=overrides)
 
@@ -49,7 +55,7 @@ def _candles(start: float, step: float, n: int) -> list[OHLCV]:
 
 class TestFactorEngine:
     def test_bullish_snapshot_from_trend_and_volume(self):
-        engine = FactorEngine({"strategy": {}})
+        engine = FactorEngine({"strategy": {}, "regime": {"enabled": True}})
         features = _feature_vector()
         snapshot = engine.evaluate(
             features,
@@ -62,10 +68,14 @@ class TestFactorEngine:
             supplementary_history={"open_interest": [1000.0, 1005.0, 1010.0]},
             candles_15m=_candles(100.0, 0.5, 4),
             candles_1h=_candles(100.0, 1.0, 4),
+            market_context={"regime": "risk_on", "score": 0.45, "breadth": 0.7},
         )
         assert snapshot.entry_score > 0.5
         assert snapshot.blocker_score < 0.4
+        assert snapshot.regime == "risk_on"
+        assert "market_regime" in snapshot.supporting_factors
         assert "trend_alignment" in snapshot.supporting_factors
+        assert "breakout_confirmation" in snapshot.supporting_factors
 
     def test_perp_crowding_becomes_blocker(self):
         engine = FactorEngine({"strategy": {}})
@@ -82,4 +92,17 @@ class TestFactorEngine:
         )
         perp = next(obs for obs in snapshot.observations if obs.name == "perp_crowding")
         assert perp.bias == FactorBias.BEARISH
+        assert snapshot.blocker_score > 0.0
+
+    def test_market_risk_off_adds_regime_blocker(self):
+        engine = FactorEngine({"strategy": {}, "regime": {"enabled": True}})
+        snapshot = engine.evaluate(
+            _feature_vector(),
+            market_context={"regime": "risk_off", "score": -0.20, "breadth": 0.2},
+        )
+        regime_obs = next(
+            obs for obs in snapshot.observations if obs.name == "market_regime"
+        )
+        assert regime_obs.bias == FactorBias.BEARISH
+        assert snapshot.regime == "risk_off"
         assert snapshot.blocker_score > 0.0

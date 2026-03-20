@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import time
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Dict, Optional, Set
+from typing import TYPE_CHECKING, Any, Dict, Optional, Set
 
 from core.models import OHLCV, Order, OrderStatus, StrategyState
 from data.buffer import LiveBuffer
@@ -107,6 +107,7 @@ class StrategyMonitor:
         # ICIR tracking: store previous factors per symbol for online learning
         self._prev_factors: Dict[str, list] = {}
         self._prev_prices: Dict[str, float] = {}
+        self._latest_market_context: Optional[dict] = None
 
     async def run(self) -> None:
         """Main event loop."""
@@ -154,6 +155,7 @@ class StrategyMonitor:
         snapshot = self._tracker.snapshot()
         latest_candles: Dict[str, OHLCV] = {}
         atr_values: Dict[str, float] = {}
+        symbol_state: Dict[str, Dict[str, Any]] = {}
 
         # Track which symbols have a completed resampled bar this iteration
         alpha_ready: Set[str] = set()
@@ -216,9 +218,47 @@ class StrategyMonitor:
             )
             atr_values[symbol] = features.atr
 
+            # Fetch higher-TF candles once so the same context is available to
+            # both the market-regime builder and the per-symbol factor pipeline.
+            candles_15m = None
+            candles_1h = None
+            if self._multi_timeframes:
+                if 15 in self._multi_timeframes:
+                    candles_15m = await self._buffer.get_resampled_candles(
+                        symbol, 15, n=50
+                    )
+                if 60 in self._multi_timeframes:
+                    candles_1h = await self._buffer.get_resampled_candles(
+                        symbol, 60, n=50
+                    )
+
+            symbol_state[symbol] = {
+                "candles": candles,
+                "strategy_candles": strategy_candles,
+                "supplementary": supplementary,
+                "features": features,
+                "candles_15m": candles_15m,
+                "candles_1h": candles_1h,
+            }
+
             # ── Strategy Gating (only on completed resampled bars) ──
             if symbol not in alpha_ready:
                 continue
+
+        market_context = self._build_market_context(symbol_state)
+        self._latest_market_context = market_context
+
+        for symbol, strategy in self._strategies.items():
+            state = symbol_state.get(symbol)
+            if state is None or symbol not in alpha_ready:
+                continue
+
+            candles = state["candles"]
+            strategy_candles = state["strategy_candles"]
+            supplementary = state["supplementary"]
+            features = state["features"]
+            candles_15m = state["candles_15m"]
+            candles_1h = state["candles_1h"]
 
             # ICIR online learning: record previous factors vs realized return
             if self._icir_tracker is not None and symbol in self._prev_factors:
@@ -279,6 +319,7 @@ class StrategyMonitor:
                 supplementary_history=supplementary_history,
                 candles_15m=candles_15m,
                 candles_1h=candles_1h,
+                market_context=market_context,
             )
             model_signal = None
             if self._use_model_overlay:
@@ -375,12 +416,13 @@ class StrategyMonitor:
                 if p.state == StrategyState.HOLDING
             ]
             logger.info(
-                "Iter %d | NAV=%.2f | Cash=%.2f | PnL=%.2f | DD=%.2f%% | Holdings=%s",
+                "Iter %d | NAV=%.2f | Cash=%.2f | PnL=%.2f | DD=%.2f%% | Regime=%s | Holdings=%s",
                 iteration,
                 snap.nav,
                 snap.cash,
                 snap.daily_pnl,
                 snap.drawdown * 100,
+                (self._latest_market_context or {}).get("regime", "n/a"),
                 holdings or "none",
             )
 
@@ -449,3 +491,103 @@ class StrategyMonitor:
                 self._strategies[order.symbol].on_fill(order)
             elif order.status in (OrderStatus.CANCELLED, OrderStatus.REJECTED):
                 self._strategies[order.symbol].on_cancel(order)
+
+    def _build_market_context(
+        self, symbol_state: Dict[str, Dict[str, Any]]
+    ) -> Optional[dict]:
+        regime_cfg = self._config.get("regime", {})
+        if not regime_cfg.get("enabled", False):
+            return None
+        if not symbol_state:
+            return None
+
+        benchmark_symbols = regime_cfg.get(
+            "benchmark_symbols", ["BTC/USDT", "ETH/USDT"]
+        )
+        benchmark_scores: Dict[str, float] = {}
+        benchmark_funding: list[float] = []
+        benchmark_volatility: list[float] = []
+
+        for symbol in benchmark_symbols:
+            state = symbol_state.get(symbol)
+            if state is None:
+                continue
+            features = state["features"]
+            benchmark_scores[symbol] = self._benchmark_score(
+                features,
+                candles_1h=state.get("candles_1h"),
+            )
+            benchmark_funding.append(
+                state["supplementary"].get("funding_rate", features.funding_rate)
+            )
+            benchmark_volatility.append(features.volatility)
+
+        if not benchmark_scores:
+            return None
+
+        feature_list = [state["features"] for state in symbol_state.values()]
+        breadth = self._market_breadth(feature_list)
+        breadth_score = max(-1.0, min(1.0, 2.0 * breadth - 1.0))
+        volume_expansion = sum(
+            max(0.0, min(1.0, (feat.volume_ratio - 1.0) / 1.5))
+            for feat in feature_list
+        ) / max(len(feature_list), 1)
+        benchmark_avg = sum(benchmark_scores.values()) / len(benchmark_scores)
+        volatility_ceiling = regime_cfg.get("volatility_ceiling", 0.020)
+        avg_benchmark_vol = sum(benchmark_volatility) / max(len(benchmark_volatility), 1)
+        vol_stress = max(
+            0.0,
+            min(1.0, avg_benchmark_vol / max(volatility_ceiling, 1e-6) - 1.0),
+        )
+
+        score = (
+            0.50 * benchmark_avg
+            + 0.30 * breadth_score
+            + 0.10 * volume_expansion
+            - 0.10 * vol_stress
+        )
+        risk_on_threshold = regime_cfg.get("risk_on_threshold", 0.25)
+        neutral_threshold = regime_cfg.get("neutral_threshold", 0.05)
+        if score >= risk_on_threshold:
+            regime = "risk_on"
+        elif score >= neutral_threshold:
+            regime = "neutral"
+        else:
+            regime = "risk_off"
+
+        return {
+            "regime": regime,
+            "score": max(-1.0, min(1.0, score)),
+            "breadth": breadth,
+            "volume_expansion": volume_expansion,
+            "avg_funding": sum(benchmark_funding) / max(len(benchmark_funding), 1),
+            "avg_benchmark_volatility": avg_benchmark_vol,
+            "vol_stress": vol_stress,
+            "benchmarks": benchmark_scores,
+        }
+
+    @staticmethod
+    def _market_breadth(features_list: list[Any]) -> float:
+        if not features_list:
+            return 0.5
+        positive = sum(
+            1
+            for feat in features_list
+            if feat.momentum > 0 and feat.ema_fast >= feat.ema_slow
+        )
+        return positive / len(features_list)
+
+    @staticmethod
+    def _benchmark_score(features: Any, candles_1h: Optional[list[OHLCV]]) -> float:
+        ema_spread = 0.0
+        if features.ema_slow > 0:
+            ema_spread = (features.ema_fast - features.ema_slow) / features.ema_slow
+
+        hourly_momentum = 0.0
+        if candles_1h and len(candles_1h) >= 6 and candles_1h[-6].close > 0:
+            hourly_momentum = (
+                candles_1h[-1].close - candles_1h[-6].close
+            ) / candles_1h[-6].close
+
+        score = ema_spread * 120.0 + features.momentum * 8.0 + hourly_momentum * 10.0
+        return max(-1.0, min(1.0, score))

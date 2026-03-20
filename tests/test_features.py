@@ -104,6 +104,15 @@ class TestExtract:
         assert fv.ema_slow > 0
         assert fv.atr >= 0
         assert fv.volatility >= 0
+        assert "breakout_distance" in fv.raw
+        assert "trend_slope" in fv.raw
+        assert "volume_zscore" in fv.raw
+
+    def test_raw_trend_fields_capture_breakout_context(self, extractor):
+        candles = [make_candle(close=100 + i, volume=10 + i) for i in range(40)]
+        fv = extractor.extract(candles)
+        assert fv.raw["breakout_distance"] >= 0.0
+        assert fv.raw["trend_slope"] > 0.0
 
     def test_too_few_candles_returns_zeros(self, extractor):
         candles = [make_candle() for _ in range(3)]

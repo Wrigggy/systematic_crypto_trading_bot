@@ -107,6 +107,7 @@ alpha:
   icir_tau: 50.0            # decay rate for lambda
 
 strategy:
+  profile: "regime_trend_v1"
   max_positions_per_symbol: 1
   use_model_overlay: false  # when true, alpha engine is only a filter/size overlay
   position_size_pct: 0.10   # fallback if Kelly is disabled
@@ -136,6 +137,9 @@ strategy:
   model_filter_threshold: 0.05
   model_exit_threshold: -0.10
   model_size_weight: 0.15
+  neutral_entry_size_multiplier: 0.50
+  risk_off_entry_size_multiplier: 0.00
+  min_volatility_size_multiplier: 0.35
   min_volume_ratio: 1.10
   min_order_book_imbalance: 1.02
   max_funding_rate: 0.0005
@@ -143,16 +147,36 @@ strategy:
   max_open_interest_change: 0.03
   max_volatility: 0.025
   factor_weights:
-    trend_alignment: 0.28
-    momentum_impulse: 0.22
-    volume_confirmation: 0.15
-    liquidity_balance: 0.10
-    perp_crowding: 0.15
+    market_regime: 0.20
+    trend_alignment: 0.24
+    momentum_impulse: 0.18
+    breakout_confirmation: 0.12
+    volume_confirmation: 0.14
+    liquidity_balance: 0.08
+    perp_crowding: 0.14
     volatility_regime: 0.10
 
+regime:
+  enabled: true
+  benchmark_symbols: ["BTC/USDT", "ETH/USDT"]
+  risk_on_threshold: 0.25
+  neutral_threshold: 0.05
+  breadth_min_symbols: 5
+  volatility_ceiling: 0.020
+
+trend:
+  breakout_lookback: 20
+  trend_slope_lookback: 20
+  volume_zscore_window: 24
+  breakout_min_distance: 0.10
+  breakout_overheat_distance: 1.75
+  min_trend_slope: 0.0005
+  min_volume_zscore: -0.25
+  vol_target_floor: 0.012
+
 risk:
-  max_portfolio_exposure: 0.50
-  max_single_exposure: 0.15
+  max_portfolio_exposure: 0.45
+  max_single_exposure: 0.12
   trailing_stop_pct: 0.03
   atr_stop_multiplier: 2.0
   daily_drawdown_limit: 0.05

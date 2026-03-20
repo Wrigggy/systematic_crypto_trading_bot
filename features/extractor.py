@@ -38,6 +38,9 @@ class FeatureExtractor:
         self._atr_period: int = config.get("atr_period", 14)
         self._momentum_window: int = config.get("momentum_window", 10)
         self._volatility_window: int = config.get("volatility_window", 20)
+        self._breakout_lookback: int = config.get("breakout_lookback", 20)
+        self._trend_slope_lookback: int = config.get("trend_slope_lookback", 20)
+        self._volume_zscore_window: int = config.get("volume_zscore_window", 24)
 
     @property
     def min_candles(self) -> int:
@@ -71,8 +74,25 @@ class FeatureExtractor:
             )
 
         closes = [c.close for c in candles]
+        atr = self.compute_atr(candles, self._atr_period)
         volume_ratio = self.compute_volume_ratio(candles)
         supp = supplementary or {}
+        raw = {
+            "breakout_distance": self.compute_breakout_distance(
+                candles,
+                lookback=self._breakout_lookback,
+                atr=atr,
+            ),
+            "trend_slope": self.compute_trend_slope(
+                closes, window=self._trend_slope_lookback
+            ),
+            "volume_zscore": self.compute_volume_zscore(
+                candles, window=self._volume_zscore_window
+            ),
+            "realized_vol_short": self.compute_volatility(
+                closes, max(5, self._volatility_window // 2)
+            ),
+        }
 
         return FeatureVector(
             symbol=candles[-1].symbol,
@@ -80,13 +100,14 @@ class FeatureExtractor:
             rsi=self.compute_rsi(closes, self._rsi_period),
             ema_fast=self.compute_ema(closes, self._ema_fast),
             ema_slow=self.compute_ema(closes, self._ema_slow),
-            atr=self.compute_atr(candles, self._atr_period),
+            atr=atr,
             momentum=self.compute_momentum(closes, self._momentum_window),
             volatility=self.compute_volatility(closes, self._volatility_window),
             order_book_imbalance=supp.get("order_book_imbalance", 0.0),
             volume_ratio=volume_ratio,
             funding_rate=supp.get("funding_rate", 0.0),
             taker_ratio=supp.get("taker_ratio", 0.0),
+            raw=raw,
         )
 
     def extract_sequence(
@@ -425,3 +446,45 @@ class FeatureExtractor:
         if avg < 1e-10:
             return 1.0
         return candles[-1].volume / avg
+
+    @staticmethod
+    def compute_breakout_distance(
+        candles: List[OHLCV], lookback: int = 20, atr: float | None = None
+    ) -> float:
+        """Distance from the prior lookback high, normalized by ATR when available."""
+        if len(candles) < lookback + 1:
+            return 0.0
+        prev_high = max(c.high for c in candles[-(lookback + 1) : -1])
+        close = candles[-1].close
+        if prev_high <= 0:
+            return 0.0
+        if atr is not None and atr > 1e-10:
+            return (close - prev_high) / atr
+        return (close - prev_high) / prev_high
+
+    @staticmethod
+    def compute_trend_slope(closes: List[float], window: int = 20) -> float:
+        """Linear slope of recent closes, normalized by mean price."""
+        if len(closes) < window:
+            return 0.0
+        y = np.array(closes[-window:], dtype=np.float64)
+        mean_price = float(np.mean(y))
+        if mean_price <= 1e-10:
+            return 0.0
+        x = np.arange(window, dtype=np.float64)
+        slope, _ = np.polyfit(x, y, 1)
+        return float(slope / mean_price)
+
+    @staticmethod
+    def compute_volume_zscore(candles: List[OHLCV], window: int = 24) -> float:
+        """Z-score of the latest volume versus the recent rolling window."""
+        if len(candles) < window + 1:
+            return 0.0
+        hist = np.array(
+            [c.volume for c in candles[-(window + 1) : -1]], dtype=np.float64
+        )
+        std = float(np.std(hist))
+        if std < 1e-10:
+            return 0.0
+        mean = float(np.mean(hist))
+        return float((candles[-1].volume - mean) / std)

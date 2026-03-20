@@ -29,6 +29,7 @@ fi
 
 # Use venv python explicitly to avoid system python confusion
 PYTHON="$PROJECT_DIR/.venv/bin/python3"
+STRATEGY_PROFILE="${STRATEGY_PROFILE:-regime_trend_v1}"
 
 # Validate required env vars (either COMP or regular keys)
 if [ -z "${ROOSTOO_COMP_API_KEY:-}${ROOSTOO_API_KEY:-}" ] || [ -z "${ROOSTOO_COMP_API_SECRET:-}${ROOSTOO_API_SECRET:-}" ]; then
@@ -44,6 +45,7 @@ mkdir -p logs
 
 echo "=== Starting Trading Competition Bot ==="
 echo "Mode: roostoo"
+echo "Strategy profile: $STRATEGY_PROFILE"
 echo "Time: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
 echo "========================================="
 
@@ -53,7 +55,7 @@ RESTART_COUNT=0
 BACKOFF=30
 
 while [ $RESTART_COUNT -lt $MAX_RESTARTS ]; do
-    if $PYTHON main.py --mode roostoo; then
+    if $PYTHON main.py --mode roostoo --strategy-profile "$STRATEGY_PROFILE"; then
         echo "Bot exited cleanly"
         break
     else

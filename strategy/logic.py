@@ -108,6 +108,17 @@ class StrategyLogic:
         self._require_trend_alignment: bool = strategy_cfg.get(
             "require_trend_alignment", True
         )
+        self._neutral_entry_size_multiplier: float = strategy_cfg.get(
+            "neutral_entry_size_multiplier", 0.5
+        )
+        self._risk_off_entry_size_multiplier: float = strategy_cfg.get(
+            "risk_off_entry_size_multiplier", 0.0
+        )
+        self._min_volatility_size_multiplier: float = strategy_cfg.get(
+            "min_volatility_size_multiplier", 0.35
+        )
+        trend_cfg = config.get("trend", {})
+        self._vol_target_floor: float = trend_cfg.get("vol_target_floor", 0.012)
         self._entry_filled_qty: float = 0.0
         self._exit_filled_qty: float = 0.0
         self._exit_fill_notional: float = 0.0
@@ -239,29 +250,46 @@ class StrategyLogic:
                 )
 
         if self._state == StrategyState.FLAT:
+            regime_multiplier = self._entry_size_multiplier(factors.regime)
             structure_ok = self._entry_structure_ok(factors)
             self._factor_history.append(
                 effective_entry
-                if effective_blocker <= self._max_blocker_score and structure_ok
+                if (
+                    effective_blocker <= self._max_blocker_score
+                    and structure_ok
+                    and regime_multiplier > 0
+                )
                 else 0.0
             )
             if (
                 effective_entry < self._min_entry_score
                 or effective_blocker > self._max_blocker_score
                 or not structure_ok
+                or regime_multiplier <= 0
             ):
                 if any(v >= self._min_entry_score for v in list(self._factor_history)[:-1]):
                     self._factor_history.clear()
+                if regime_multiplier <= 0:
+                    reasoning.append(
+                        f"Market regime {factors.regime} blocks new long entries"
+                    )
                 return None
 
             if not self._confirmed_factor_entry():
                 return None
+
+            if regime_multiplier < 1.0:
+                reasoning.append(
+                    f"Market regime {factors.regime} reduces entry size to {regime_multiplier:.2f}x"
+                )
 
             qty = self._compute_buy_quantity_from_score(
                 portfolio,
                 current_price=current_price,
                 conviction_score=effective_entry,
                 threshold=self._min_entry_score,
+                regime=factors.regime,
+                realized_volatility=self._extract_realized_volatility(factors),
             )
             if qty <= 0:
                 return None
@@ -597,6 +625,8 @@ class StrategyLogic:
         current_price: float,
         conviction_score: float,
         threshold: float,
+        regime: Optional[str] = None,
+        realized_volatility: Optional[float] = None,
     ) -> float:
         """Compute buy quantity from a generic conviction score."""
         if portfolio.cash <= 0 or current_price <= 0:
@@ -617,18 +647,31 @@ class StrategyLogic:
         conviction_intensity = max(0.0, min(1.0, conviction_intensity))
 
         scaled = self._kelly_fraction * raw_kelly * conviction_intensity
-        position_pct = self._base_size_pct + scaled * (
+        raw_position_pct = self._base_size_pct + scaled * (
             self._max_size_pct - self._base_size_pct
         )
-        position_pct = max(self._base_size_pct, min(self._max_size_pct, position_pct))
+        raw_position_pct = max(
+            self._base_size_pct, min(self._max_size_pct, raw_position_pct)
+        )
+
+        regime_multiplier = self._entry_size_multiplier(regime)
+        volatility_multiplier = self._volatility_size_multiplier(realized_volatility)
+        position_pct = raw_position_pct * regime_multiplier * volatility_multiplier
 
         logger.info(
-            "[%s] Half-Kelly sizing: raw_kelly=%.4f, conviction_intensity=%.4f, position_pct=%.4f",
+            "[%s] Half-Kelly sizing: raw_kelly=%.4f, conviction_intensity=%.4f, "
+            "raw_position_pct=%.4f, regime_mult=%.2f, vol_mult=%.2f, position_pct=%.4f",
             self._symbol,
             raw_kelly,
             conviction_intensity,
+            raw_position_pct,
+            regime_multiplier,
+            volatility_multiplier,
             position_pct,
         )
+
+        if position_pct <= 0:
+            return 0.0
 
         allocation = portfolio.nav * position_pct
         allocation = min(allocation, portfolio.cash * 0.99)
@@ -651,6 +694,32 @@ class StrategyLogic:
         if self._require_trend_alignment and "trend_alignment" not in factors.supporting_factors:
             return False
         return True
+
+    def _entry_size_multiplier(self, regime: Optional[str]) -> float:
+        if regime == "risk_off":
+            return self._risk_off_entry_size_multiplier
+        if regime == "neutral":
+            return self._neutral_entry_size_multiplier
+        return 1.0
+
+    def _volatility_size_multiplier(self, realized_volatility: Optional[float]) -> float:
+        if realized_volatility is None or realized_volatility <= 0:
+            return 1.0
+        if self._vol_target_floor <= 0:
+            return 1.0
+        scaled = min(1.0, self._vol_target_floor / realized_volatility)
+        return max(self._min_volatility_size_multiplier, scaled)
+
+    @staticmethod
+    def _extract_realized_volatility(factors: FactorSnapshot) -> Optional[float]:
+        for obs in factors.observations:
+            if obs.name != "volatility_regime":
+                continue
+            volatility = obs.metadata.get("volatility")
+            if volatility is None:
+                return None
+            return float(volatility)
+        return None
 
     def _record_entry_fill(self, order: Order) -> None:
         fill_qty = order.filled_quantity or 0.0

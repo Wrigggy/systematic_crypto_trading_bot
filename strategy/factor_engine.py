@@ -20,9 +20,13 @@ class FactorEngine:
 
     def __init__(self, config: dict):
         strategy_cfg = config.get("strategy", {})
+        regime_cfg = config.get("regime", {})
+        trend_cfg = config.get("trend", {})
         self._factor_weights: Dict[str, float] = {
+            "market_regime": 0.20,
             "trend_alignment": 0.28,
             "momentum_impulse": 0.22,
+            "breakout_confirmation": 0.12,
             "volume_confirmation": 0.15,
             "liquidity_balance": 0.10,
             "perp_crowding": 0.15,
@@ -39,6 +43,17 @@ class FactorEngine:
             "max_open_interest_change", 0.03
         )
         self._max_volatility: float = strategy_cfg.get("max_volatility", 0.025)
+        self._regime_enabled: bool = regime_cfg.get("enabled", False)
+        self._risk_on_threshold: float = regime_cfg.get("risk_on_threshold", 0.25)
+        self._neutral_threshold: float = regime_cfg.get("neutral_threshold", 0.05)
+        self._breakout_min_distance: float = trend_cfg.get(
+            "breakout_min_distance", 0.10
+        )
+        self._breakout_overheat_distance: float = trend_cfg.get(
+            "breakout_overheat_distance", 1.75
+        )
+        self._min_trend_slope: float = trend_cfg.get("min_trend_slope", 0.0005)
+        self._min_volume_zscore: float = trend_cfg.get("min_volume_zscore", -0.25)
 
     def evaluate(
         self,
@@ -47,12 +62,15 @@ class FactorEngine:
         supplementary_history: Optional[dict] = None,
         candles_15m: Optional[List[OHLCV]] = None,
         candles_1h: Optional[List[OHLCV]] = None,
+        market_context: Optional[dict] = None,
     ) -> FactorSnapshot:
         supp = supplementary or {}
         hist = supplementary_history or {}
         observations = [
+            self._market_regime(features, market_context),
             self._trend_alignment(features, candles_15m, candles_1h),
             self._momentum_impulse(features),
+            self._breakout_confirmation(features),
             self._volume_confirmation(features),
             self._liquidity_balance(features, supp),
             self._perp_crowding(features, supp, hist),
@@ -86,8 +104,10 @@ class FactorEngine:
         exit_score = exit_score / exit_weight if exit_weight > 0 else 0.0
         confidence = _clamp(entry_score * (1.0 - 0.5 * blocker))
 
-        if entry_score >= 0.65 and blocker < 0.35:
-            regime = "trend_following"
+        if market_context is not None:
+            regime = market_context.get("regime", "neutral")
+        elif entry_score >= 0.65 and blocker < 0.35:
+            regime = "risk_on"
         elif blocker >= 0.60:
             regime = "risk_off"
         else:
@@ -108,6 +128,58 @@ class FactorEngine:
             supporting_factors=supporting_factors,
             blocking_factors=blocking_factors,
             summary=summary,
+        )
+
+    def _market_regime(
+        self, features: FeatureVector, market_context: Optional[dict]
+    ) -> FactorObservation:
+        if not self._regime_enabled or market_context is None:
+            return FactorObservation(
+                symbol=features.symbol,
+                name="market_regime",
+                category="market",
+                timestamp=features.timestamp,
+                bias=FactorBias.NEUTRAL,
+                strength=0.0,
+                value=0.0,
+                threshold=self._neutral_threshold,
+                horizon_minutes=240,
+                expected_move_bps=0.0,
+                thesis="Market regime filter disabled",
+                invalidate_condition="Regime filter becomes active",
+                metadata={},
+            )
+
+        regime = market_context.get("regime", "neutral")
+        score = float(market_context.get("score", 0.0))
+        breadth = float(market_context.get("breadth", 0.5))
+        bias = FactorBias.NEUTRAL
+        strength = 0.0
+        if regime == "risk_on":
+            denom = max(self._risk_on_threshold - self._neutral_threshold, 1e-6)
+            strength = _clamp((score - self._neutral_threshold) / denom)
+            bias = FactorBias.BULLISH
+        elif regime == "risk_off":
+            denom = max(self._neutral_threshold + 1.0, 1e-6)
+            strength = _clamp((self._neutral_threshold - score) / denom)
+            bias = FactorBias.BEARISH
+
+        return FactorObservation(
+            symbol=features.symbol,
+            name="market_regime",
+            category="market",
+            timestamp=features.timestamp,
+            bias=bias,
+            strength=strength,
+            value=score,
+            threshold=self._neutral_threshold,
+            horizon_minutes=240,
+            expected_move_bps=60.0 + 120.0 * strength,
+            thesis=(
+                f"Market regime {regime} with score {score:.3f} and breadth {breadth:.2f}"
+            ),
+            invalidate_condition="Benchmark trend and market breadth revert toward neutral",
+            metadata=dict(market_context),
         )
 
     def _trend_alignment(
@@ -201,6 +273,67 @@ class FactorEngine:
             thesis=f"Volume ratio {features.volume_ratio:.2f} vs trigger {self._min_volume_ratio:.2f}",
             invalidate_condition="Volume ratio falls back below confirmation threshold",
             metadata={"volume_ratio": features.volume_ratio},
+        )
+
+    def _breakout_confirmation(self, features: FeatureVector) -> FactorObservation:
+        breakout_distance = float(features.raw.get("breakout_distance", 0.0))
+        trend_slope = float(features.raw.get("trend_slope", 0.0))
+        volume_zscore = float(features.raw.get("volume_zscore", 0.0))
+
+        bias = FactorBias.NEUTRAL
+        strength = 0.0
+        if (
+            breakout_distance >= self._breakout_min_distance
+            and breakout_distance <= self._breakout_overheat_distance
+            and trend_slope >= self._min_trend_slope
+            and volume_zscore >= self._min_volume_zscore
+        ):
+            distance_component = breakout_distance / max(
+                self._breakout_overheat_distance, 1e-6
+            )
+            slope_component = trend_slope / max(self._min_trend_slope * 4.0, 1e-6)
+            volume_component = (volume_zscore + 1.0) / 3.0
+            strength = _clamp(
+                0.5 * distance_component
+                + 0.3 * slope_component
+                + 0.2 * volume_component
+            )
+            bias = FactorBias.BULLISH
+        elif breakout_distance > self._breakout_overheat_distance:
+            strength = _clamp(
+                (breakout_distance - self._breakout_overheat_distance)
+                / max(self._breakout_overheat_distance, 1e-6)
+            )
+            bias = FactorBias.BEARISH
+        elif breakout_distance < -0.50 and trend_slope < 0:
+            strength = _clamp(
+                min(abs(breakout_distance), 2.0) / 2.0
+                + min(abs(trend_slope) / max(self._min_trend_slope * 4.0, 1e-6), 1.0)
+                * 0.25
+            )
+            bias = FactorBias.BEARISH
+
+        return FactorObservation(
+            symbol=features.symbol,
+            name="breakout_confirmation",
+            category="price_structure",
+            timestamp=features.timestamp,
+            bias=bias,
+            strength=strength if bias != FactorBias.NEUTRAL else 0.0,
+            value=breakout_distance,
+            threshold=self._breakout_min_distance,
+            horizon_minutes=180,
+            expected_move_bps=30.0 + 130.0 * strength,
+            thesis=(
+                f"Breakout distance {breakout_distance:.2f} ATR, trend slope {trend_slope:.4f}, "
+                f"volume z-score {volume_zscore:.2f}"
+            ),
+            invalidate_condition="Breakout distance compresses back into the prior range or price becomes overextended",
+            metadata={
+                "breakout_distance": breakout_distance,
+                "trend_slope": trend_slope,
+                "volume_zscore": volume_zscore,
+            },
         )
 
     def _liquidity_balance(

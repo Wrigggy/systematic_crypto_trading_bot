@@ -17,6 +17,11 @@ fi
 echo "=== Bot Status (from $LOG) ==="
 echo ""
 
+# Strategy profile
+echo "--- Strategy ---"
+grep "Strategy profile:" "$LOG" | tail -1 || echo "(profile not found in log)"
+echo ""
+
 # Latest NAV/Holdings line
 echo "--- Portfolio ---"
 grep -E "Iter [0-9]+ \| NAV=" "$LOG" | tail -1 || echo "(no status yet — still warming up?)"

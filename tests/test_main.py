@@ -9,6 +9,7 @@ import pytest
 from data.buffer import LiveBuffer
 from data.resampler import CandleResampler, MultiResampler
 from main import (
+    _apply_strategy_profile,
     _backfill_resampled_history,
     _resolve_roostoo_starting_capital,
     load_config,
@@ -37,6 +38,8 @@ class TestLoadConfig:
             "features",
             "alpha",
             "strategy",
+            "regime",
+            "trend",
             "risk",
             "execution",
             "paper",
@@ -60,6 +63,26 @@ class TestLoadConfig:
         assert "max_portfolio_exposure" in risk
         assert "trailing_stop_pct" in risk
         assert "daily_drawdown_limit" in risk
+
+    def test_default_config_selects_regime_trend_profile(self):
+        config = load_config("config/default.yaml")
+        assert config["strategy"]["profile"] == "regime_trend_v1"
+
+
+class TestStrategyProfiles:
+    def test_apply_regime_trend_profile_overrides_runtime_knobs(self):
+        config = {
+            "alpha": {"engine": "ensemble", "resample_minutes": 1},
+            "strategy": {"use_model_overlay": True},
+        }
+
+        _apply_strategy_profile(config, "regime_trend_v1")
+
+        assert config["strategy"]["profile"] == "regime_trend_v1"
+        assert config["alpha"]["engine"] == "rule_based"
+        assert config["alpha"]["resample_minutes"] == 5
+        assert config["strategy"]["use_model_overlay"] is False
+        assert config["regime"]["enabled"] is True
 
 
 class TestRoostooStartingCapital:

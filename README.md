@@ -31,8 +31,10 @@ Binance WS / SimFeed
         |     - RSI / EMA / ATR / momentum / volatility / volume ratio
         |
         +--> FactorEngine
+        |     - market_regime
         |     - trend_alignment
         |     - momentum_impulse
+        |     - breakout_confirmation
         |     - volume_confirmation
         |     - liquidity_balance
         |     - perp_crowding
@@ -142,8 +144,10 @@ Core runtime features include:
 
 Current factor pack:
 
+- `market_regime`
 - `trend_alignment`
 - `momentum_impulse`
+- `breakout_confirmation`
 - `volume_confirmation`
 - `liquidity_balance`
 - `perp_crowding`
@@ -174,6 +178,18 @@ It may only:
 - filter weak entries
 - slightly boost conviction when aligned
 - nudge size and exit urgency
+
+## Strategy Profile
+
+The default runtime now uses the explicit `regime_trend_v1` profile.
+
+- it keeps the system factor-first
+- it computes one market regime context per iteration from benchmark trend plus market breadth
+- it blocks new longs in `risk_off`
+- it scales new entries down in `neutral`
+- it reduces position size further when realized volatility is elevated
+
+For Roostoo mode, [`scripts/start_competition.sh`](scripts/start_competition.sh) launches with `--strategy-profile regime_trend_v1` so the runtime is pinned to that profile instead of relying on ad hoc flag combinations.
 
 Important:
 

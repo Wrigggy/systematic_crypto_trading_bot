@@ -5,12 +5,14 @@ Usage:
     uv run python main.py --config config/live.yaml  # custom config
     uv run python main.py --mode live             # override mode
     uv run python main.py --mode roostoo          # Roostoo competition mode
+    uv run python main.py --mode roostoo --strategy-profile regime_trend_v1
 """
 
 from __future__ import annotations
 
 import argparse
 import asyncio
+import copy
 import logging
 import os
 import signal
@@ -40,6 +42,63 @@ from strategy.factor_engine import FactorEngine
 from strategy.monitor import StrategyMonitor
 
 logger = logging.getLogger(__name__)
+
+
+STRATEGY_PROFILES: dict[str, dict] = {
+    "regime_trend_v1": {
+        "alpha": {
+            "engine": "rule_based",
+            "resample_minutes": 5,
+            "multi_timeframes": [15, 60],
+        },
+        "strategy": {
+            "profile": "regime_trend_v1",
+            "use_model_overlay": False,
+            "confirmation_bars": 2,
+            "min_entry_score": 0.60,
+            "max_blocker_score": 0.38,
+            "min_exit_score": 0.52,
+            "neutral_entry_size_multiplier": 0.50,
+            "risk_off_entry_size_multiplier": 0.00,
+            "min_volatility_size_multiplier": 0.35,
+            "require_trend_alignment": True,
+            "min_supporting_factors": 2,
+            "min_supporting_categories": 2,
+            "factor_weights": {
+                "market_regime": 0.20,
+                "trend_alignment": 0.24,
+                "momentum_impulse": 0.18,
+                "breakout_confirmation": 0.12,
+                "volume_confirmation": 0.14,
+                "liquidity_balance": 0.08,
+                "perp_crowding": 0.14,
+                "volatility_regime": 0.10,
+            },
+        },
+        "regime": {
+            "enabled": True,
+            "benchmark_symbols": ["BTC/USDT", "ETH/USDT"],
+            "risk_on_threshold": 0.25,
+            "neutral_threshold": 0.05,
+            "breadth_min_symbols": 5,
+            "volatility_ceiling": 0.020,
+        },
+        "trend": {
+            "breakout_lookback": 20,
+            "trend_slope_lookback": 20,
+            "volume_zscore_window": 24,
+            "breakout_min_distance": 0.10,
+            "breakout_overheat_distance": 1.75,
+            "min_trend_slope": 0.0005,
+            "min_volume_zscore": -0.25,
+            "vol_target_floor": 0.012,
+        },
+        "risk": {
+            "max_portfolio_exposure": 0.45,
+            "max_single_exposure": 0.12,
+        },
+    },
+}
 
 
 def setup_logging(mode: str = "paper") -> None:
@@ -73,6 +132,45 @@ def setup_logging(mode: str = "paper") -> None:
 def load_config(path: str) -> dict:
     with open(path, "r") as f:
         return yaml.safe_load(f)
+
+
+def _merge_dicts(base: dict, overrides: dict) -> dict:
+    """Recursively merge overrides into base."""
+    for key, value in overrides.items():
+        if isinstance(value, dict) and isinstance(base.get(key), dict):
+            _merge_dicts(base[key], value)
+        else:
+            base[key] = copy.deepcopy(value)
+    return base
+
+
+def _apply_strategy_profile(config: dict, profile_name: Optional[str]) -> None:
+    """Apply a named strategy profile as explicit runtime overrides."""
+    if not profile_name:
+        return
+    if profile_name not in STRATEGY_PROFILES:
+        valid = ", ".join(sorted(STRATEGY_PROFILES))
+        raise SystemExit(
+            f"Unknown strategy profile '{profile_name}'. Valid profiles: {valid}"
+        )
+    _merge_dicts(config, copy.deepcopy(STRATEGY_PROFILES[profile_name]))
+    config.setdefault("strategy", {})["profile"] = profile_name
+
+
+def _build_feature_config(config: dict) -> dict:
+    """Merge feature-extractor settings from features and trend sections."""
+    feature_cfg = copy.deepcopy(config.get("features", {}))
+    trend_cfg = config.get("trend", {})
+    feature_cfg.setdefault(
+        "breakout_lookback", trend_cfg.get("breakout_lookback", 20)
+    )
+    feature_cfg.setdefault(
+        "trend_slope_lookback", trend_cfg.get("trend_slope_lookback", 20)
+    )
+    feature_cfg.setdefault(
+        "volume_zscore_window", trend_cfg.get("volume_zscore_window", 24)
+    )
+    return feature_cfg
 
 
 def _apply_env_overrides(config: dict) -> None:
@@ -209,10 +307,17 @@ async def _backfill_resampled_history(
 
 
 async def main(config: dict) -> None:
+    _apply_strategy_profile(
+        config, config.get("strategy", {}).get("profile")
+    )
     mode = config.get("mode", "paper")
     logger.info("=== Trading Competition Framework ===")
     logger.info("Mode: %s", mode)
     logger.info("Symbols: %d pairs", len(config.get("symbols", [])))
+    logger.info(
+        "Strategy profile: %s",
+        config.get("strategy", {}).get("profile", "custom"),
+    )
 
     _validate_config(config)
 
@@ -235,7 +340,7 @@ async def main(config: dict) -> None:
         # Prefetch historical candles to eliminate warmup wait
         from features.extractor import FeatureExtractor as _FE
 
-        _tmp_extractor = _FE(config.get("features", {}))
+        _tmp_extractor = _FE(_build_feature_config(config))
         engine_type = config.get("alpha", {}).get("engine", "rule_based")
         seq_len = config.get("alpha", {}).get("seq_len", 30)
         resample_minutes = config.get("alpha", {}).get("resample_minutes", 1)
@@ -287,7 +392,7 @@ async def main(config: dict) -> None:
         executor = live_exec
 
     # 5. Feature extractor
-    extractor = FeatureExtractor(config.get("features", {}))
+    extractor = FeatureExtractor(_build_feature_config(config))
     factor_engine = FactorEngine(config)
 
     # 6. Alpha engine (with optional LSTM model)
@@ -603,6 +708,12 @@ if __name__ == "__main__":
         action="store_true",
         help="Enable the optional model overlay (filter/confidence/size only)",
     )
+    parser.add_argument(
+        "--strategy-profile",
+        choices=sorted(STRATEGY_PROFILES),
+        default=None,
+        help="Apply a named strategy profile with explicit runtime overrides",
+    )
     args = parser.parse_args()
 
     # Load .env file if present (so credentials work without shell scripts)
@@ -618,6 +729,9 @@ if __name__ == "__main__":
     config = load_config(args.config)
     if args.mode:
         config["mode"] = args.mode
+    if args.strategy_profile:
+        config.setdefault("strategy", {})["profile"] = args.strategy_profile
+    _apply_strategy_profile(config, config.get("strategy", {}).get("profile"))
     if args.engine:
         config.setdefault("alpha", {})["engine"] = args.engine
     if args.use_model_overlay:
