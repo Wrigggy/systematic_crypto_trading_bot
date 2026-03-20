@@ -107,6 +107,20 @@ class TestRoostooExecutor:
         assert balances == {"USD": 100.0, "SOL": 3.5}
 
     @pytest.mark.asyncio
+    async def test_get_balance_preserves_zero_usd_snapshot(self):
+        executor = RoostooExecutor({"api_key": "key", "api_secret": "secret"})
+        executor._signed_request = AsyncMock(
+            return_value={
+                "Success": True,
+                "SpotWallet": {},
+            }
+        )
+
+        balances = await executor.get_balance()
+
+        assert balances == {"USD": 0.0}
+
+    @pytest.mark.asyncio
     async def test_get_status_maps_exchange_status(self):
         executor = RoostooExecutor({"api_key": "key", "api_secret": "secret"})
         executor._signed_request = AsyncMock(

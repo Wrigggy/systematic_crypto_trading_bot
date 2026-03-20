@@ -239,6 +239,9 @@ class RoostooExecutor(BaseExecutor):
                 free = float(amounts.get("Free", 0))
                 if free > 0 or asset == "USD":
                     balances[asset] = free
+            # Preserve a successful zero-cash snapshot so the runtime does not
+            # fall back to paper capital when the account simply has no free USD.
+            balances.setdefault("USD", 0.0)
         elif data:
             logger.warning("Roostoo balance failed: %s", data.get("ErrMsg", data))
         return balances
