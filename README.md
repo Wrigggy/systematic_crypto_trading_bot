@@ -343,6 +343,11 @@ This keeps the architecture stable even as the research surface expands.
 - recovers positions on restart
 - writes structured JSONL logs
 
+Roostoo credentials can come from either:
+
+- `ROOSTOO_COMP_API_KEY` / `ROOSTOO_COMP_API_SECRET`
+- `ROOSTOO_API_KEY` / `ROOSTOO_API_SECRET`
+
 ### Live
 
 ```bash
@@ -386,6 +391,41 @@ Wrapper script:
 ```bash
 ./scripts/start_competition.sh
 ```
+
+## Roostoo Smoke Tests
+
+The repository includes opt-in live smoke tests in `tests/test_roostoo_live_smoke.py`.
+
+They are gated on environment variables so the default test suite never sends
+real API requests.
+
+Balance and ticker smoke:
+
+```bash
+export RUN_ROOSTOO_SMOKE=1
+export ROOSTOO_COMP_API_KEY=...
+export ROOSTOO_COMP_API_SECRET=...
+.venv/bin/pytest -q tests/test_roostoo_live_smoke.py -k balance_and_ticker
+```
+
+Optional live order smoke:
+
+```bash
+export RUN_ROOSTOO_SMOKE=1
+export RUN_ROOSTOO_ORDER_SMOKE=1
+export ROOSTOO_COMP_API_KEY=...
+export ROOSTOO_COMP_API_SECRET=...
+export ROOSTOO_ORDER_SMOKE_QTY=0.00005
+export ROOSTOO_ORDER_SMOKE_PRICE=1000
+.venv/bin/pytest -q tests/test_roostoo_live_smoke.py -k live_order
+```
+
+Notes:
+
+- the balance/ticker smoke is the safer default
+- the order smoke is intentionally disabled unless explicitly enabled
+- if the environment variables are missing, these tests will be skipped
+- `ROOSTOO_BASE_URL` and `ROOSTOO_SMOKE_SYMBOL` are optional overrides
 
 ## Optional Model Training
 
