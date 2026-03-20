@@ -36,6 +36,7 @@ from models.model_wrapper import ModelWrapper
 from risk.risk_shield import RiskShield
 from risk.tracker import PortfolioTracker
 from data.resampler import CandleResampler, MultiResampler
+from strategy.factor_engine import FactorEngine
 from strategy.monitor import StrategyMonitor
 
 logger = logging.getLogger(__name__)
@@ -192,10 +193,13 @@ async def main(config: dict) -> None:
         _tmp_extractor = _FE(config.get("features", {}))
         engine_type = config.get("alpha", {}).get("engine", "rule_based")
         seq_len = config.get("alpha", {}).get("seq_len", 30)
+        resample_minutes = config.get("alpha", {}).get("resample_minutes", 1)
+        strategy_lookback = (_tmp_extractor.min_candles + 10) * max(resample_minutes, 1)
         if engine_type in ("lstm", "transformer", "ensemble"):
-            n_prefetch = _tmp_extractor.min_candles + seq_len + 10  # +10 buffer
+            model_lookback = seq_len + _tmp_extractor.min_candles + 10
+            n_prefetch = max(strategy_lookback, model_lookback)
         else:
-            n_prefetch = _tmp_extractor.min_candles + 10
+            n_prefetch = strategy_lookback
         n_prefetch = min(n_prefetch, 1000)  # Binance limit
         logger.info("Prefetching %d candles per symbol from Binance REST...", n_prefetch)
         await prefetch_candles(config.get("symbols", []), buffer, n_candles=n_prefetch)
@@ -232,6 +236,7 @@ async def main(config: dict) -> None:
 
     # 5. Feature extractor
     extractor = FeatureExtractor(config.get("features", {}))
+    factor_engine = FactorEngine(config)
 
     # 6. Alpha engine (with optional LSTM model)
     model: Optional[ModelWrapper] = None
@@ -344,6 +349,7 @@ async def main(config: dict) -> None:
         config=config,
         buffer=buffer,
         extractor=extractor,
+        factor_engine=factor_engine,
         alpha_engine=alpha_engine,
         risk_shield=risk_shield,
         tracker=tracker,
@@ -353,6 +359,7 @@ async def main(config: dict) -> None:
         trade_tracker=trade_tracker,
         icir_tracker=icir_tracker,
         executor=executor,
+        trade_logger=trade_logger,
     )
 
     # 11b. Position recovery on restart (Roostoo mode only)
@@ -529,7 +536,12 @@ if __name__ == "__main__":
         "--engine",
         choices=["rule_based", "lstm", "ensemble"],
         default=None,
-        help="Override alpha engine: rule_based, lstm, or ensemble",
+        help="Override optional model overlay engine: rule_based, lstm, or ensemble",
+    )
+    parser.add_argument(
+        "--use-model-overlay",
+        action="store_true",
+        help="Enable the optional model overlay (filter/confidence/size only)",
     )
     args = parser.parse_args()
 
@@ -548,6 +560,8 @@ if __name__ == "__main__":
         config["mode"] = args.mode
     if args.engine:
         config.setdefault("alpha", {})["engine"] = args.engine
+    if args.use_model_overlay:
+        config.setdefault("strategy", {})["use_model_overlay"] = True
 
     _apply_env_overrides(config)
     setup_logging(config.get("mode", "paper"))

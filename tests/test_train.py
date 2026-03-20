@@ -9,6 +9,7 @@ from features.extractor import FeatureExtractor
 from models.train import (
     build_dataset,
     generate_synthetic_ohlcv,
+    normalize_labels_by_train,
     raw_to_ohlcv,
     resample_candles,
 )
@@ -57,12 +58,13 @@ class TestBuildDataset:
         with pytest.raises(ValueError, match="Not enough candles"):
             build_dataset(candles, extractor, seq_len=30, forward_window=5)
 
-    def test_labels_are_z_scored(self, extractor):
+    def test_labels_are_raw_tanh_scaled(self, extractor):
         candles = generate_synthetic_ohlcv("BTC/USDT", n_candles=200, seed=42)
         X, y = build_dataset(candles, extractor)
-        # Labels are z-score normalized: mean≈0, std≈1
-        assert abs(y.mean()) < 0.1
-        assert abs(y.std() - 1.0) < 0.2
+        # build_dataset now returns raw tanh-scaled labels so chronological
+        # normalization can be fit on the train split only.
+        assert abs(y).max() <= 1.0
+        assert y.std() > 0.0
         assert X.dtype == np.float32
         assert y.dtype == np.float32
 
@@ -80,6 +82,17 @@ class TestBuildDataset:
         X2, _ = build_dataset(candles, extractor, forward_window=10)
         # More forward window = fewer samples
         assert len(X1) > len(X2)
+
+    def test_train_only_label_normalization(self, extractor):
+        candles = generate_synthetic_ohlcv("BTC/USDT", n_candles=200, seed=42)
+        _, y = build_dataset(candles, extractor, seq_len=30, forward_window=5)
+        split = int(len(y) * 0.8)
+        y_train = y[:split]
+        y_val = y[split:]
+        y_train_n, y_val_n = normalize_labels_by_train(y_train, y_val)
+        assert abs(y_train_n.mean()) < 0.1
+        assert abs(y_train_n.std() - 1.0) < 0.2
+        assert y_val_n.dtype == np.float32
 
 
 class TestGenerateSyntheticOhlcv:

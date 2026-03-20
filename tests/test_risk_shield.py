@@ -128,6 +128,17 @@ class TestExposureLimits:
             # Quantity should be clamped to what cash allows
             assert result.quantity * 100.0 < 100_000
 
+    def test_market_buy_uses_reference_market_price(self, shield, tracker):
+        order = Order(
+            symbol="BTC/USDT",
+            side=Side.BUY,
+            order_type=OrderType.MARKET,
+            quantity=100.0,
+        )
+        result = shield.validate(order, tracker, market_price=1000.0)
+        assert result is not None
+        assert result.quantity < 100.0  # clamped by exposure/cash using market price
+
 
 class TestTrailingStop:
     def test_triggers_on_drop_from_peak(self, shield, tracker):

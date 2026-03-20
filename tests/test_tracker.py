@@ -141,6 +141,16 @@ class TestResetDaily:
         snap = tracker.snapshot()
         assert snap.daily_pnl == pytest.approx(0.0, abs=0.1)
 
+    def test_daily_drawdown_uses_daily_peak_not_lifetime_peak(self, tracker):
+        tracker.on_fill(make_filled_buy(price=100.0, qty=500.0))
+        tracker.update_prices("BTC/USDT", 120.0)  # build lifetime peak
+        tracker.update_prices("BTC/USDT", 110.0)  # new day starts below the lifetime peak
+        tracker.reset_daily()
+        tracker.update_prices("BTC/USDT", 118.0)
+        tracker.update_prices("BTC/USDT", 108.0)
+        snap = tracker.snapshot()
+        assert snap.daily_drawdown < snap.drawdown
+
 
 class TestInvalidFill:
     def test_fill_with_no_price(self, tracker):

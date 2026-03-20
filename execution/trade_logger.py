@@ -90,6 +90,51 @@ class TradeLogger:
             }
         )
 
+    async def log_factor_snapshot(
+        self,
+        symbol: str,
+        regime: str,
+        entry_score: float,
+        blocker_score: float,
+        confidence: float,
+        observations: list[dict],
+        summary: str,
+    ) -> None:
+        """Log the explicit factor state used by the strategy."""
+        await self._write_event(
+            {
+                "event": "factor_snapshot",
+                "timestamp": datetime.utcnow().isoformat(),
+                "symbol": symbol,
+                "regime": regime,
+                "entry_score": entry_score,
+                "blocker_score": blocker_score,
+                "confidence": confidence,
+                "observations": observations,
+                "summary": summary,
+            }
+        )
+
+    async def log_strategy_intent(
+        self,
+        intent: Dict[str, Any],
+    ) -> None:
+        """Log a human-readable strategy intent before risk/execution."""
+        payload = dict(intent)
+        payload["event"] = "strategy_intent"
+        payload["timestamp"] = datetime.utcnow().isoformat()
+        await self._write_event(payload)
+
+    async def log_trade_instruction(
+        self,
+        instruction: Dict[str, Any],
+    ) -> None:
+        """Log a normalized trade instruction before order submission."""
+        payload = dict(instruction)
+        payload["event"] = "trade_instruction"
+        payload["timestamp"] = datetime.utcnow().isoformat()
+        await self._write_event(payload)
+
     async def log_api(
         self,
         endpoint: str,

@@ -27,10 +27,12 @@ class LiveBuffer:
         self._depth_data: Dict[str, dict] = {}  # latest order book imbalance per symbol
         self._funding_data: Dict[str, float] = {}  # latest funding rate per symbol
         self._taker_data: Dict[str, float] = {}  # latest taker ratio per symbol
+        self._open_interest_data: Dict[str, float] = {}  # latest open interest per symbol
         # Per-candle supplementary history (mirrors candle deque size)
         self._obi_history: Dict[str, deque] = {}
         self._funding_history: Dict[str, deque] = {}
         self._taker_history: Dict[str, deque] = {}
+        self._open_interest_history: Dict[str, deque] = {}
         self._lock = asyncio.Lock()
         self._event = asyncio.Event()
         # Resampled candle storage: {minutes: {symbol: deque[OHLCV]}}
@@ -122,12 +124,21 @@ class LiveBuffer:
             self._taker_history[symbol].append(ratio)
             self._supp_last_update[f"{symbol}:taker"] = time.monotonic()
 
+    async def push_open_interest(self, symbol: str, open_interest: float) -> None:
+        """Store latest open interest."""
+        async with self._lock:
+            self._open_interest_data[symbol] = open_interest
+            if symbol not in self._open_interest_history:
+                self._open_interest_history[symbol] = deque(maxlen=self._max_candles)
+            self._open_interest_history[symbol].append(open_interest)
+            self._supp_last_update[f"{symbol}:open_interest"] = time.monotonic()
+
     async def get_supplementary(self, symbol: str) -> dict:
         """Get all supplementary data for a symbol."""
         async with self._lock:
             # Warn if supplementary data is stale
             now = time.monotonic()
-            for key_suffix in ("depth", "funding", "taker"):
+            for key_suffix in ("depth", "funding", "taker", "open_interest"):
                 key = f"{symbol}:{key_suffix}"
                 last = self._supp_last_update.get(key)
                 if last is not None and (now - last) > self._supp_stale_threshold:
@@ -142,6 +153,7 @@ class LiveBuffer:
                 "order_book_imbalance": depth.get("order_book_imbalance", 0.0),
                 "funding_rate": self._funding_data.get(symbol, 0.0),
                 "taker_ratio": self._taker_data.get(symbol, 0.0),
+                "open_interest": self._open_interest_data.get(symbol, 0.0),
             }
 
     async def get_supplementary_history(self, symbol: str, n: int) -> dict:
@@ -150,10 +162,12 @@ class LiveBuffer:
             obi = list(self._obi_history.get(symbol, deque()))[-n:]
             funding = list(self._funding_history.get(symbol, deque()))[-n:]
             taker = list(self._taker_history.get(symbol, deque()))[-n:]
+            open_interest = list(self._open_interest_history.get(symbol, deque()))[-n:]
             return {
                 "order_book_imbalance": obi,
                 "funding_rate": funding,
                 "taker_ratio": taker,
+                "open_interest": open_interest,
             }
 
     async def push_resampled(self, minutes: int, candle: OHLCV) -> None:

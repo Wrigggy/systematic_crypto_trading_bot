@@ -9,10 +9,12 @@ from core.models import OHLCV, Order, OrderStatus, StrategyState
 from data.buffer import LiveBuffer
 from data.resampler import CandleResampler, MultiResampler
 from execution.order_manager import OrderManager
+from execution.trade_logger import TradeLogger
 from features.extractor import FeatureExtractor
 from models.inference import AlphaEngine
 from risk.risk_shield import RiskShield
 from risk.tracker import PortfolioTracker
+from strategy.factor_engine import FactorEngine
 from strategy.logic import StrategyLogic
 
 if TYPE_CHECKING:
@@ -37,15 +39,18 @@ class StrategyMonitor:
         risk_shield: RiskShield,
         tracker: PortfolioTracker,
         order_manager: OrderManager,
+        factor_engine: Optional[FactorEngine] = None,
         resampler: Optional[CandleResampler] = None,
         multi_resampler: Optional[MultiResampler] = None,
         trade_tracker=None,
         icir_tracker=None,
         executor: Optional["BaseExecutor"] = None,
+        trade_logger: Optional[TradeLogger] = None,
     ):
         self._config = config
         self._buffer = buffer
         self._extractor = extractor
+        self._factor_engine = factor_engine or FactorEngine(config)
         self._alpha_engine = alpha_engine
         self._risk_shield = risk_shield
         self._tracker = tracker
@@ -56,10 +61,19 @@ class StrategyMonitor:
         self._trade_tracker = trade_tracker
         self._icir_tracker = icir_tracker
         self._executor = executor
+        self._trade_logger = trade_logger
 
         # Multi-TF timeframes to fetch for alpha filter
         alpha_cfg = config.get("alpha", {})
         self._multi_timeframes = alpha_cfg.get("multi_timeframes", [])
+        self._use_model_overlay = config.get("strategy", {}).get(
+            "use_model_overlay", False
+        )
+        self._primary_minutes = 1
+        if multi_resampler is not None:
+            self._primary_minutes = multi_resampler.primary_minutes
+        elif resampler is not None:
+            self._primary_minutes = resampler.minutes
 
         # Per-symbol strategy state machines
         symbols = config.get("symbols", [])
@@ -168,6 +182,7 @@ class StrategyMonitor:
             elif self._resampler is not None:
                 resampled = self._resampler.push(candles[-1])
                 if resampled is not None:
+                    await self._buffer.push_resampled(self._resampler.minutes, resampled)
                     alpha_ready.add(symbol)
             else:
                 alpha_ready.add(symbol)
@@ -185,10 +200,23 @@ class StrategyMonitor:
 
             # ── Feature Extraction (always, for ATR stops) ──
             supplementary = await self._buffer.get_supplementary(symbol)
-            features = self._extractor.extract(candles, supplementary=supplementary)
+            strategy_candles = candles
+            if self._primary_minutes > 1:
+                resampled_candles = await self._buffer.get_resampled_candles(
+                    symbol, self._primary_minutes, n=max(self._extractor.min_candles + 10, 60)
+                )
+                if resampled_candles:
+                    strategy_candles = resampled_candles
+
+            if len(strategy_candles) < self._extractor.min_candles:
+                continue
+
+            features = self._extractor.extract(
+                strategy_candles, supplementary=supplementary
+            )
             atr_values[symbol] = features.atr
 
-            # ── Alpha Scoring (only on completed resampled bars) ──
+            # ── Strategy Gating (only on completed resampled bars) ──
             if symbol not in alpha_ready:
                 continue
 
@@ -238,23 +266,67 @@ class StrategyMonitor:
                         symbol, 60, n=50
                     )
 
-            signal = self._alpha_engine.score(
-                candles,
+            factor_snapshot = self._factor_engine.evaluate(
+                features,
                 supplementary=supplementary,
                 supplementary_history=supplementary_history,
                 candles_15m=candles_15m,
                 candles_1h=candles_1h,
             )
+            model_signal = None
+            if self._use_model_overlay:
+                model_signal = self._alpha_engine.score(
+                    candles,
+                    supplementary=supplementary,
+                    supplementary_history=supplementary_history,
+                    candles_15m=candles_15m,
+                    candles_1h=candles_1h,
+                )
 
-            # ── Strategy Decision ──
+            if self._trade_logger is not None:
+                await self._trade_logger.log_factor_snapshot(
+                    symbol=factor_snapshot.symbol,
+                    regime=factor_snapshot.regime,
+                    entry_score=factor_snapshot.entry_score,
+                    blocker_score=factor_snapshot.blocker_score,
+                    confidence=factor_snapshot.confidence,
+                    observations=[
+                        obs.model_dump(mode="json")
+                        for obs in factor_snapshot.observations
+                    ],
+                    summary=factor_snapshot.summary,
+                )
+
+            # ── Strategy Intent → Instruction ──
             snapshot = self._tracker.snapshot()
-            order = strategy.on_signal(
-                signal, snapshot, current_price=candles[-1].close
+            intent = strategy.on_factors(
+                factor_snapshot,
+                snapshot,
+                current_price=candles[-1].close,
+                model_signal=model_signal,
             )
 
-            if order is not None:
+            if intent is not None:
+                if self._trade_logger is not None:
+                    await self._trade_logger.log_strategy_intent(
+                        intent.model_dump(mode="json")
+                    )
+
+                instruction = strategy.build_instruction(
+                    intent, current_price=candles[-1].close
+                )
+                if self._trade_logger is not None:
+                    await self._trade_logger.log_trade_instruction(
+                        instruction.model_dump(mode="json")
+                    )
+
+                order = instruction.to_order()
                 # ── Risk Validation ──
-                validated = self._risk_shield.validate(order, self._tracker)
+                validated = self._risk_shield.validate(
+                    order,
+                    self._tracker,
+                    market_price=candles[-1].close,
+                )
                 if validated is not None:
                     result = await self._order_manager.submit(validated)
                 else:
@@ -268,7 +340,12 @@ class StrategyMonitor:
         )
         for stop_order in stop_orders:
             validated = self._risk_shield.validate(
-                stop_order, self._tracker, is_stop=True
+                stop_order,
+                self._tracker,
+                market_price=latest_candles.get(stop_order.symbol).close
+                if latest_candles.get(stop_order.symbol) is not None
+                else 0.0,
+                is_stop=True,
             )
             if validated is not None:
                 await self._order_manager.submit(validated)

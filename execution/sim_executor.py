@@ -23,6 +23,7 @@ class SimExecutor(BaseExecutor):
         self._fee_bps: float = config.get("fee_bps", 10.0)
         self._buffer = buffer
         self._pending_orders: Dict[str, Order] = {}
+        self._submitted_candle_ts: Dict[str, datetime] = {}
 
     async def execute(self, order: Order) -> Order:
         candle = await self._buffer.get_latest_candle(order.symbol)
@@ -31,74 +32,22 @@ class SimExecutor(BaseExecutor):
             logger.warning("SimExecutor: no price data for %s", order.symbol)
             return order
 
-        price = candle.close
-        slippage_mult = self._slippage_bps / 10000.0
-
-        if order.order_type == OrderType.MARKET:
-            # Apply slippage
-            if order.side == Side.BUY:
-                fill_price = price * (1 + slippage_mult)
-            else:
-                fill_price = price * (1 - slippage_mult)
-
-            order.filled_price = round(fill_price, 2)
-            order.filled_quantity = order.quantity
-            order.filled_at = datetime.utcnow()
-            order.status = OrderStatus.FILLED
-
-            logger.info(
-                "SIM %s %s qty=%.6f @ %.2f (market=%.2f, slip=%.1fbps)",
-                order.side.value,
-                order.symbol,
-                order.filled_quantity,
-                order.filled_price,
-                price,
-                self._slippage_bps,
-            )
-
-        elif order.order_type == OrderType.LIMIT:
-            can_fill = False
-            if (
-                order.side == Side.BUY
-                and order.price is not None
-                and price <= order.price
-            ):
-                can_fill = True
-            elif (
-                order.side == Side.SELL
-                and order.price is not None
-                and price >= order.price
-            ):
-                can_fill = True
-
-            if can_fill:
-                order.filled_price = order.price
-                order.filled_quantity = order.quantity
-                order.filled_at = datetime.utcnow()
-                order.status = OrderStatus.FILLED
-                logger.info(
-                    "SIM LIMIT %s %s qty=%.6f @ %.2f",
-                    order.side.value,
-                    order.symbol,
-                    order.filled_quantity,
-                    order.filled_price,
-                )
-            else:
-                order.status = OrderStatus.SUBMITTED
-                self._pending_orders[order.order_id] = order
-                logger.info(
-                    "SIM LIMIT pending: %s %s qty=%.6f limit=%.2f (market=%.2f)",
-                    order.side.value,
-                    order.symbol,
-                    order.quantity,
-                    order.price,
-                    price,
-                )
+        order.status = OrderStatus.SUBMITTED
+        self._pending_orders[order.order_id] = order
+        self._submitted_candle_ts[order.order_id] = candle.timestamp
+        logger.info(
+            "SIM queued %s %s qty=%.6f after candle %s (next bar execution)",
+            order.side.value,
+            order.symbol,
+            order.quantity,
+            candle.timestamp.isoformat(),
+        )
 
         return order
 
     async def cancel(self, order_id: str, symbol: str) -> Order:
         order = self._pending_orders.pop(order_id, None)
+        self._submitted_candle_ts.pop(order_id, None)
         if order:
             order.status = OrderStatus.CANCELLED
             logger.info("SIM cancelled order %s", order_id)
@@ -127,34 +76,55 @@ class SimExecutor(BaseExecutor):
         # Recheck current price against limit price
         candle = await self._buffer.get_latest_candle(order.symbol)
         if candle is not None:
-            price = candle.close
-            can_fill = False
-            if (
-                order.side == Side.BUY
-                and order.price is not None
-                and price <= order.price
-            ):
-                can_fill = True
-            elif (
-                order.side == Side.SELL
-                and order.price is not None
-                and price >= order.price
-            ):
-                can_fill = True
+            submitted_ts = self._submitted_candle_ts.get(order_id)
+            if submitted_ts is not None and candle.timestamp <= submitted_ts:
+                return order
 
-            if can_fill:
-                order.filled_price = order.price
+            price = candle.open
+            slippage_mult = self._slippage_bps / 10000.0
+
+            if order.order_type == OrderType.MARKET:
+                if order.side == Side.BUY:
+                    fill_price = price * (1 + slippage_mult)
+                else:
+                    fill_price = price * (1 - slippage_mult)
+                order.filled_price = round(fill_price, 2)
                 order.filled_quantity = order.quantity
                 order.filled_at = datetime.utcnow()
                 order.status = OrderStatus.FILLED
                 self._pending_orders.pop(order_id, None)
+                self._submitted_candle_ts.pop(order_id, None)
                 logger.info(
-                    "SIM LIMIT filled on recheck: %s %s qty=%.6f @ %.2f (market=%.2f)",
+                    "SIM %s %s qty=%.6f @ %.2f (next_open=%.2f, slip=%.1fbps)",
                     order.side.value,
                     order.symbol,
                     order.filled_quantity,
                     order.filled_price,
                     price,
+                    self._slippage_bps,
                 )
+            elif order.order_type == OrderType.LIMIT and order.price is not None:
+                touched = False
+                if order.side == Side.BUY and candle.low <= order.price:
+                    touched = True
+                elif order.side == Side.SELL and candle.high >= order.price:
+                    touched = True
+
+                if touched:
+                    order.filled_price = order.price
+                    order.filled_quantity = order.quantity
+                    order.filled_at = datetime.utcnow()
+                    order.status = OrderStatus.FILLED
+                    self._pending_orders.pop(order_id, None)
+                    self._submitted_candle_ts.pop(order_id, None)
+                    logger.info(
+                        "SIM LIMIT filled: %s %s qty=%.6f @ %.2f (bar %.2f/%.2f)",
+                        order.side.value,
+                        order.symbol,
+                        order.filled_quantity,
+                        order.filled_price,
+                        candle.low,
+                        candle.high,
+                    )
 
         return order

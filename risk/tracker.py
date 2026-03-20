@@ -29,6 +29,7 @@ class PortfolioTracker:
         self._initial_nav: float = initial_capital
         self._peak_nav: float = initial_capital
         self._daily_start_nav: float = initial_capital
+        self._daily_peak_nav: float = initial_capital
         self._positions: Dict[str, Position] = {}
         self._fee_rate: float = fee_bps / 10000.0
         self._fill_lock = threading.Lock()
@@ -39,8 +40,13 @@ class PortfolioTracker:
 
     def snapshot(self) -> PortfolioSnapshot:
         nav = self._compute_nav()
-        drawdown = (
+        lifetime_drawdown = (
             (self._peak_nav - nav) / self._peak_nav if self._peak_nav > 0 else 0.0
+        )
+        daily_drawdown = (
+            (self._daily_peak_nav - nav) / self._daily_peak_nav
+            if self._daily_peak_nav > 0
+            else 0.0
         )
         daily_pnl = nav - self._daily_start_nav
 
@@ -51,7 +57,8 @@ class PortfolioTracker:
             nav=nav,
             daily_pnl=daily_pnl,
             peak_nav=self._peak_nav,
-            drawdown=drawdown,
+            drawdown=lifetime_drawdown,
+            daily_drawdown=daily_drawdown,
         )
 
     def on_fill(self, order: Order) -> None:
@@ -120,6 +127,8 @@ class PortfolioTracker:
         nav = self._compute_nav()
         if nav > self._peak_nav:
             self._peak_nav = nav
+        if nav > self._daily_peak_nav:
+            self._daily_peak_nav = nav
         self._nav_history.append((datetime.utcnow(), nav))
 
     def update_prices(self, symbol: str, price: float) -> None:
@@ -131,6 +140,11 @@ class PortfolioTracker:
                 pos.unrealized_pnl = (price - pos.entry_price) * pos.quantity
                 if price > pos.peak_price:
                     pos.peak_price = price
+        nav = self._compute_nav()
+        if nav > self._peak_nav:
+            self._peak_nav = nav
+        if nav > self._daily_peak_nav:
+            self._daily_peak_nav = nav
 
     def get_position(self, symbol: str) -> Position:
         return self._get_or_create_position(symbol)
@@ -160,6 +174,7 @@ class PortfolioTracker:
     def reset_daily(self) -> None:
         """Call at start of each trading day."""
         self._daily_start_nav = self._compute_nav()
+        self._daily_peak_nav = self._daily_start_nav
         logger.info("Daily reset: NAV=%.2f", self._daily_start_nav)
 
     def restore_position(self, symbol: str, quantity: float, entry_price: float) -> None:
@@ -193,6 +208,8 @@ class PortfolioTracker:
         self._nav_history.append((datetime.utcnow(), nav))
         if nav > self._peak_nav:
             self._peak_nav = nav
+        if nav > self._daily_peak_nav:
+            self._daily_peak_nav = nav
 
     def _daily_returns(self) -> np.ndarray:
         """Compute daily returns from NAV history.

@@ -92,7 +92,7 @@ features:
   momentum_window: 10
 
 alpha:
-  engine: "rule_based"      # "rule_based" | "lstm" | "ensemble"
+  engine: "rule_based"      # optional overlay engine: "rule_based" | "lstm" | "ensemble"
   entry_threshold: 0.6
   exit_threshold: -0.2
   model_path: "artifacts/model.onnx"
@@ -108,6 +108,7 @@ alpha:
 
 strategy:
   max_positions_per_symbol: 1
+  use_model_overlay: false  # when true, alpha engine is only a filter/size overlay
   position_size_pct: 0.10   # fallback if Kelly is disabled
   base_size_pct: 0.05       # Half-Kelly floor
   max_size_pct: 0.15        # Half-Kelly ceiling
@@ -120,6 +121,31 @@ strategy:
   kelly_window: 50          # rolling window for adaptive Kelly
   kelly_min_trades: 10      # min trades before blending with priors
   exit_tiers: []            # graduated exits, e.g. [{threshold: -0.1, sell_pct: 0.5}, {threshold: -0.3, sell_pct: 1.0}]
+  min_entry_score: 0.62
+  max_blocker_score: 0.35
+  min_exit_score: 0.55
+  urgent_entry_score: 0.82
+  signal_horizon_minutes: 240
+  exit_horizon_minutes: 30
+  base_stop_loss_pct: 0.012
+  take_profit_1_rr: 1.2
+  take_profit_2_rr: 2.0
+  model_filter_threshold: 0.05
+  model_exit_threshold: -0.10
+  model_size_weight: 0.15
+  min_volume_ratio: 1.10
+  min_order_book_imbalance: 1.02
+  max_funding_rate: 0.0005
+  max_taker_ratio: 1.20
+  max_open_interest_change: 0.03
+  max_volatility: 0.025
+  factor_weights:
+    trend_alignment: 0.28
+    momentum_impulse: 0.22
+    volume_confirmation: 0.15
+    liquidity_balance: 0.10
+    perp_crowding: 0.15
+    volatility_regime: 0.10
 
 risk:
   max_portfolio_exposure: 0.50

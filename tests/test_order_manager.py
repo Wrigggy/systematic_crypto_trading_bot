@@ -32,7 +32,8 @@ def manager(buffer, tracker):
 @pytest.mark.asyncio
 class TestSubmit:
     async def test_market_order_fills(self, manager, buffer, tracker):
-        await buffer.push_candle(make_candle(close=100.0))
+        ts0 = datetime(2025, 1, 1)
+        await buffer.push_candle(make_candle(close=100.0, ts=ts0))
         order = Order(
             symbol="BTC/USDT",
             side=Side.BUY,
@@ -40,7 +41,9 @@ class TestSubmit:
             quantity=1.0,
         )
         result = await manager.submit(order)
-        assert result.status == OrderStatus.FILLED
+        assert result.status == OrderStatus.SUBMITTED
+        await buffer.push_candle(make_candle(close=101.0, open_=100.0, ts=ts0 + timedelta(minutes=1)))
+        await manager.check_pending()
         # Portfolio should reflect the fill
         pos = tracker.get_position("BTC/USDT")
         assert pos.quantity == 1.0
@@ -63,7 +66,8 @@ class TestSubmit:
 @pytest.mark.asyncio
 class TestCallbacks:
     async def test_fill_callback_invoked(self, manager, buffer):
-        await buffer.push_candle(make_candle(close=100.0))
+        ts0 = datetime(2025, 1, 1)
+        await buffer.push_candle(make_candle(close=100.0, ts=ts0))
         fills = []
         manager.register_fill_callback(lambda o: fills.append(o))
 
@@ -74,11 +78,14 @@ class TestCallbacks:
             quantity=1.0,
         )
         await manager.submit(order)
+        await buffer.push_candle(make_candle(close=101.0, open_=100.0, ts=ts0 + timedelta(minutes=1)))
+        await manager.check_pending()
         assert len(fills) == 1
         assert fills[0].status == OrderStatus.FILLED
 
     async def test_multiple_callbacks(self, manager, buffer):
-        await buffer.push_candle(make_candle(close=100.0))
+        ts0 = datetime(2025, 1, 1)
+        await buffer.push_candle(make_candle(close=100.0, ts=ts0))
         results_a = []
         results_b = []
         manager.register_fill_callback(lambda o: results_a.append(o.symbol))
@@ -91,6 +98,8 @@ class TestCallbacks:
             quantity=1.0,
         )
         await manager.submit(order)
+        await buffer.push_candle(make_candle(close=101.0, open_=100.0, ts=ts0 + timedelta(minutes=1)))
+        await manager.check_pending()
         assert results_a == ["BTC/USDT"]
         assert results_b == ["BTC/USDT"]
 

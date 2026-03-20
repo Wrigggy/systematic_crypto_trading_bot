@@ -38,11 +38,17 @@ class RiskShield:
         return self._circuit_breaker_active
 
     def validate(
-        self, order: Order, tracker: PortfolioTracker, is_stop: bool = False
+        self,
+        order: Order,
+        tracker: PortfolioTracker,
+        market_price: float = 0.0,
+        is_stop: bool = False,
     ) -> Optional[Order]:
         """Pre-trade validation. Returns order (possibly adjusted) or None if rejected.
 
         Args:
+            market_price: Latest observable market price for this symbol. Required for
+                realistic market-order exposure checks.
             is_stop: If True, skip rate limit — stop-loss orders must never be dropped.
         """
         snapshot = tracker.snapshot()
@@ -84,7 +90,7 @@ class RiskShield:
 
         # 4. Exposure checks (only for buys)
         if order.side == Side.BUY:
-            price = order.price or 0.0
+            price = order.price or market_price or 0.0
             if price <= 0:
                 # Estimate with current position price or use a conservative estimate
                 pos = tracker.get_position(order.symbol)
@@ -213,11 +219,11 @@ class RiskShield:
             return False  # already active
 
         snapshot = tracker.snapshot()
-        if snapshot.drawdown >= self._daily_drawdown_limit:
+        if snapshot.daily_drawdown >= self._daily_drawdown_limit:
             self._circuit_breaker_active = True
             logger.critical(
-                "CIRCUIT BREAKER ACTIVATED: drawdown=%.2f%% >= limit=%.2f%%",
-                snapshot.drawdown * 100,
+                "CIRCUIT BREAKER ACTIVATED: daily_drawdown=%.2f%% >= limit=%.2f%%",
+                snapshot.daily_drawdown * 100,
                 self._daily_drawdown_limit * 100,
             )
             return True

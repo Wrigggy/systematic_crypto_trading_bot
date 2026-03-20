@@ -2,16 +2,21 @@ from __future__ import annotations
 
 import logging
 from collections import deque
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 
 from core.models import (
+    FactorBias,
+    FactorSnapshot,
     Order,
     OrderType,
     PortfolioSnapshot,
     Side,
     Signal,
+    StrategyIntent,
     StrategyState,
+    TradeInstruction,
+    UrgencyLevel,
 )
 
 logger = logging.getLogger(__name__)
@@ -53,6 +58,7 @@ class StrategyLogic:
         # Signal confirmation: require N consecutive bars above entry threshold
         self._confirmation_bars: int = strategy_cfg.get("confirmation_bars", 2)
         self._alpha_history: deque = deque(maxlen=max(self._confirmation_bars, 1))
+        self._factor_history: deque = deque(maxlen=max(self._confirmation_bars, 1))
 
         # Graduated exit tiers
         self._exit_tiers: List[Dict] = strategy_cfg.get("exit_tiers", [])
@@ -67,6 +73,28 @@ class StrategyLogic:
 
         # Alpha decay
         self._decay_half_life_s: float = alpha_cfg.get("decay_half_life_s", 999999)
+
+        # Explicit strategy intent settings
+        self._min_entry_score: float = strategy_cfg.get("min_entry_score", 0.62)
+        self._max_blocker_score: float = strategy_cfg.get("max_blocker_score", 0.35)
+        self._min_exit_score: float = strategy_cfg.get("min_exit_score", 0.55)
+        self._signal_horizon_minutes: int = strategy_cfg.get(
+            "signal_horizon_minutes", 240
+        )
+        self._exit_horizon_minutes: int = strategy_cfg.get(
+            "exit_horizon_minutes", 30
+        )
+        self._base_stop_loss_pct: float = strategy_cfg.get("base_stop_loss_pct", 0.012)
+        self._take_profit_1_rr: float = strategy_cfg.get("take_profit_1_rr", 1.2)
+        self._take_profit_2_rr: float = strategy_cfg.get("take_profit_2_rr", 2.0)
+        self._urgent_entry_score: float = strategy_cfg.get("urgent_entry_score", 0.82)
+        self._model_filter_threshold: float = strategy_cfg.get(
+            "model_filter_threshold", 0.05
+        )
+        self._model_exit_threshold: float = strategy_cfg.get(
+            "model_exit_threshold", -0.10
+        )
+        self._model_size_weight: float = strategy_cfg.get("model_size_weight", 0.15)
 
     @property
     def state(self) -> StrategyState:
@@ -156,11 +184,200 @@ class StrategyLogic:
 
         return None
 
+    def on_factors(
+        self,
+        factors: FactorSnapshot,
+        portfolio: PortfolioSnapshot,
+        current_price: float = 0.0,
+        model_signal: Optional[Signal] = None,
+    ) -> Optional[StrategyIntent]:
+        """Generate a human-readable strategy intent from explicit factor observations.
+
+        The strategy is now factor-first: explicit observations determine whether we
+        should act, while the optional model signal only filters or slightly adjusts
+        conviction and sizing.
+        """
+        effective_entry = factors.entry_score
+        effective_blocker = factors.blocker_score
+        effective_exit = factors.exit_score
+        confidence = factors.confidence
+        reasoning = [obs.thesis for obs in factors.observations if obs.bias != FactorBias.NEUTRAL]
+
+        if model_signal is not None:
+            if model_signal.alpha_score < self._model_filter_threshold:
+                effective_blocker = min(1.0, max(effective_blocker, abs(model_signal.alpha_score)))
+                reasoning.append(
+                    f"Model overlay weak ({model_signal.alpha_score:.3f}) so entry conviction is filtered"
+                )
+            elif model_signal.alpha_score > 0:
+                boost = self._model_size_weight * model_signal.alpha_score
+                effective_entry = min(1.0, effective_entry + boost)
+                confidence = min(1.0, 0.7 * confidence + 0.3 * model_signal.confidence)
+                reasoning.append(
+                    f"Model overlay supportive ({model_signal.alpha_score:.3f}) and boosts conviction"
+                )
+            if model_signal.alpha_score <= self._model_exit_threshold:
+                effective_exit = max(effective_exit, abs(model_signal.alpha_score))
+                reasoning.append(
+                    f"Model overlay turned risk-off ({model_signal.alpha_score:.3f})"
+                )
+
+        if self._state == StrategyState.FLAT:
+            self._factor_history.append(effective_entry if effective_blocker <= self._max_blocker_score else 0.0)
+            if effective_entry < self._min_entry_score or effective_blocker > self._max_blocker_score:
+                if any(v >= self._min_entry_score for v in list(self._factor_history)[:-1]):
+                    self._factor_history.clear()
+                return None
+
+            if not self._confirmed_factor_entry():
+                return None
+
+            qty = self._compute_buy_quantity_from_score(
+                portfolio,
+                current_price=current_price,
+                conviction_score=effective_entry,
+                threshold=self._min_entry_score,
+            )
+            if qty <= 0:
+                return None
+
+            size_notional = qty * current_price
+            size_pct = size_notional / portfolio.nav if portfolio.nav > 0 else 0.0
+            urgency = (
+                UrgencyLevel.HIGH
+                if effective_entry >= self._urgent_entry_score
+                else UrgencyLevel.MEDIUM
+            )
+            entry_type = OrderType.MARKET if urgency == UrgencyLevel.HIGH else OrderType.LIMIT
+            entry_price = None
+            if entry_type == OrderType.LIMIT:
+                entry_price = round(current_price * (1 - self._limit_offset_bps / 10000), 8)
+
+            intent = StrategyIntent(
+                signal_time=factors.timestamp,
+                symbol=self._symbol,
+                direction=Side.BUY,
+                thesis=self._compose_thesis(factors.supporting_factors, reasoning),
+                entry_type=entry_type,
+                entry_price=entry_price,
+                size_pct=size_pct,
+                size_notional=size_notional,
+                quantity=qty,
+                signal_horizon=self._format_horizon(self._signal_horizon_minutes),
+                expected_move=self._expected_move_text(factors, bullish=True),
+                stop_loss=self._stop_loss_text(current_price),
+                take_profit=self._take_profit_text(current_price),
+                invalidate_condition=self._invalidate_text(factors),
+                urgency=urgency,
+                confidence=min(1.0, max(0.0, confidence)),
+                factor_names=factors.supporting_factors,
+                reasoning=reasoning[:4],
+            )
+            self._state = StrategyState.LONG_PENDING
+            self._factor_history.clear()
+            logger.info(
+                "[%s] factor entry intent: score=%.3f blocker=%.3f qty=%.6f order=%s",
+                self._symbol,
+                effective_entry,
+                effective_blocker,
+                qty,
+                entry_type.value,
+            )
+            return intent
+
+        if self._state == StrategyState.HOLDING:
+            pos_qty = self._position_quantity(portfolio)
+            if pos_qty <= 0:
+                self.force_flat()
+                return None
+
+            if effective_exit < self._min_exit_score and effective_blocker < self._max_blocker_score:
+                return None
+
+            size_notional = pos_qty * current_price
+            urgency = (
+                UrgencyLevel.HIGH
+                if effective_blocker >= 0.65 or effective_exit >= 0.80
+                else UrgencyLevel.MEDIUM
+            )
+            intent = StrategyIntent(
+                signal_time=factors.timestamp,
+                symbol=self._symbol,
+                direction=Side.SELL,
+                thesis=self._compose_exit_thesis(factors.blocking_factors, reasoning),
+                entry_type=OrderType.MARKET,
+                entry_price=None,
+                size_pct=size_notional / portfolio.nav if portfolio.nav > 0 else 0.0,
+                size_notional=size_notional,
+                quantity=pos_qty,
+                signal_horizon=self._format_horizon(self._exit_horizon_minutes),
+                expected_move="Protect capital before the long thesis fully decays",
+                stop_loss="Exit immediately on instruction",
+                take_profit="N/A",
+                invalidate_condition="Exit is cancelled only if blocking factors fully clear before execution",
+                urgency=urgency,
+                confidence=min(1.0, max(0.0, max(effective_exit, effective_blocker))),
+                factor_names=factors.blocking_factors,
+                reasoning=reasoning[:4],
+            )
+            logger.info(
+                "[%s] factor exit intent: exit=%.3f blocker=%.3f qty=%.6f",
+                self._symbol,
+                effective_exit,
+                effective_blocker,
+                pos_qty,
+            )
+            self._state = StrategyState.FLAT
+            return intent
+
+        return None
+
+    def build_instruction(
+        self, intent: StrategyIntent, current_price: float
+    ) -> TradeInstruction:
+        """Convert a strategy intent into a concrete trade instruction."""
+        horizon_minutes = (
+            self._signal_horizon_minutes
+            if intent.direction == Side.BUY
+            else self._exit_horizon_minutes
+        )
+        expires_at = intent.signal_time + timedelta(minutes=horizon_minutes)
+        entry_price = intent.entry_price
+        if intent.entry_type == OrderType.MARKET and current_price > 0:
+            entry_price = current_price
+
+        return TradeInstruction(
+            signal_time=intent.signal_time,
+            symbol=intent.symbol,
+            direction=intent.direction,
+            thesis=intent.thesis,
+            entry_type=intent.entry_type,
+            entry_price=entry_price if intent.entry_type == OrderType.LIMIT else None,
+            size_pct=intent.size_pct,
+            size_notional=intent.size_notional,
+            quantity=intent.quantity,
+            signal_horizon=intent.signal_horizon,
+            expected_move=intent.expected_move,
+            stop_loss=intent.stop_loss,
+            take_profit=intent.take_profit,
+            invalidate_condition=intent.invalidate_condition,
+            urgency=intent.urgency,
+            confidence=intent.confidence,
+            factor_names=intent.factor_names,
+            reasoning=intent.reasoning,
+            expires_at=expires_at,
+        )
+
     def _confirmed_entry(self) -> bool:
         """Check if we have N consecutive bars above entry threshold."""
         if len(self._alpha_history) < self._confirmation_bars:
             return False
         return all(a > self._entry_threshold for a in self._alpha_history)
+
+    def _confirmed_factor_entry(self) -> bool:
+        if len(self._factor_history) < self._confirmation_bars:
+            return False
+        return all(score >= self._min_entry_score for score in self._factor_history)
 
     def _check_graduated_exit(
         self, signal: Signal, portfolio: PortfolioSnapshot
@@ -294,6 +511,21 @@ class StrategyLogic:
         self, portfolio: PortfolioSnapshot, current_price: float, alpha_score: float
     ) -> float:
         """Compute buy quantity using Half-Kelly position sizing."""
+        return self._compute_buy_quantity_from_score(
+            portfolio,
+            current_price=current_price,
+            conviction_score=alpha_score,
+            threshold=self._entry_threshold,
+        )
+
+    def _compute_buy_quantity_from_score(
+        self,
+        portfolio: PortfolioSnapshot,
+        current_price: float,
+        conviction_score: float,
+        threshold: float,
+    ) -> float:
+        """Compute buy quantity from a generic conviction score."""
         if portfolio.cash <= 0 or current_price <= 0:
             return 0.0
 
@@ -306,22 +538,22 @@ class StrategyLogic:
 
         # Half-Kelly scaling
         raw_kelly = win_rate - (1 - win_rate) / payoff_ratio
-        alpha_intensity = (alpha_score - self._entry_threshold) / (
-            1.0 - self._entry_threshold
+        conviction_intensity = (conviction_score - threshold) / (
+            1.0 - threshold
         )
-        alpha_intensity = max(0.0, min(1.0, alpha_intensity))
+        conviction_intensity = max(0.0, min(1.0, conviction_intensity))
 
-        scaled = self._kelly_fraction * raw_kelly * alpha_intensity
+        scaled = self._kelly_fraction * raw_kelly * conviction_intensity
         position_pct = self._base_size_pct + scaled * (
             self._max_size_pct - self._base_size_pct
         )
         position_pct = max(self._base_size_pct, min(self._max_size_pct, position_pct))
 
         logger.info(
-            "[%s] Half-Kelly sizing: raw_kelly=%.4f, alpha_intensity=%.4f, position_pct=%.4f",
+            "[%s] Half-Kelly sizing: raw_kelly=%.4f, conviction_intensity=%.4f, position_pct=%.4f",
             self._symbol,
             raw_kelly,
-            alpha_intensity,
+            conviction_intensity,
             position_pct,
         )
 
@@ -329,3 +561,71 @@ class StrategyLogic:
         allocation = min(allocation, portfolio.cash * 0.99)
         allocation = max(0.0, allocation)
         return allocation / current_price if allocation > 0 else 0.0
+
+    def _position_quantity(self, portfolio: PortfolioSnapshot) -> float:
+        for pos in portfolio.positions:
+            if pos.symbol == self._symbol:
+                return pos.quantity
+        return 0.0
+
+    @staticmethod
+    def _format_horizon(minutes: int) -> str:
+        if minutes % 60 == 0:
+            return f"{minutes // 60}h"
+        return f"{minutes}m"
+
+    @staticmethod
+    def _compose_thesis(factor_names: List[str], reasoning: List[str]) -> str:
+        if factor_names:
+            names = ", ".join(factor_names[:3])
+            return f"Enter long on explicit factor alignment: {names}"
+        return reasoning[0] if reasoning else "Enter long on factor alignment"
+
+    @staticmethod
+    def _compose_exit_thesis(factor_names: List[str], reasoning: List[str]) -> str:
+        if factor_names:
+            names = ", ".join(factor_names[:3])
+            return f"Exit long because blocking factors activated: {names}"
+        return reasoning[0] if reasoning else "Exit long because the trade thesis has decayed"
+
+    def _expected_move_text(
+        self, factors: FactorSnapshot, bullish: bool = True
+    ) -> str:
+        moves = [
+            obs.expected_move_bps
+            for obs in factors.observations
+            if obs.bias == (FactorBias.BULLISH if bullish else FactorBias.BEARISH)
+        ]
+        if not moves:
+            return "Move expectation unavailable"
+        low = max(20.0, min(moves) * 0.7)
+        high = max(low, max(moves) * 1.1)
+        sign = "+" if bullish else "-"
+        return f"{sign}{low / 100:.2f}% to {sign}{high / 100:.2f}%"
+
+    def _stop_loss_text(self, current_price: float) -> str:
+        if current_price <= 0:
+            return "Exit if the primary trend breaks"
+        stop = current_price * (1 - self._base_stop_loss_pct)
+        return (
+            f"Exit on a {self._base_stop_loss_pct * 100:.1f}% adverse move "
+            f"(reference {stop:.2f}) or on primary trend failure"
+        )
+
+    def _take_profit_text(self, current_price: float) -> str:
+        if current_price <= 0:
+            return "Trim at 1.2R / 2.0R"
+        tp1 = current_price * (1 + self._base_stop_loss_pct * self._take_profit_1_rr)
+        tp2 = current_price * (1 + self._base_stop_loss_pct * self._take_profit_2_rr)
+        return f"Scale out near {tp1:.2f} and {tp2:.2f}"
+
+    @staticmethod
+    def _invalidate_text(factors: FactorSnapshot) -> str:
+        invalidators = [
+            obs.invalidate_condition
+            for obs in factors.observations
+            if obs.bias == FactorBias.BULLISH
+        ]
+        if invalidators:
+            return invalidators[0]
+        return "Invalidate if supporting factors revert to neutral"

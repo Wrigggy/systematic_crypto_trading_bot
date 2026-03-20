@@ -539,18 +539,9 @@ def _compute_all_features(
                 avg_vol > 1e-10, volumes[start:] / safe_avg, 1.0
             )
 
-    # Synthetic supplementary features for training (indices 6, 8, 9)
-    # In live mode these come from Binance feeds. During training we generate
-    # realistic synthetic values so the model learns to use them, avoiding
-    # a train/test distribution mismatch where they'd always be zero.
-    if n_features > 9:
-        rng = np.random.RandomState(42)
-        # order_book_imbalance: centered around 1.0, range ~[0.5, 2.0]
-        features[min_c:, 6] = rng.lognormal(0.0, 0.3, n - min_c).astype(np.float32)
-        # funding_rate: small values centered around 0, range ~[-0.001, 0.001]
-        features[min_c:, 8] = rng.normal(0.0001, 0.0003, n - min_c).astype(np.float32)
-        # taker_ratio: centered around 1.0, range ~[0.6, 1.6]
-        features[min_c:, 9] = rng.lognormal(0.0, 0.2, n - min_c).astype(np.float32)
+    # Keep supplementary-only features at zero in offline training unless a
+    # historical source is wired in explicitly. Fabricating these series creates
+    # a train/live mismatch that is harder to reason about than zero-filling.
 
     return features
 
@@ -606,22 +597,33 @@ def build_dataset(
         fwd_return = (fut - cur) / cur if cur > 0 else 0.0
         y[idx, 0] = np.tanh(fwd_return * 100.0)
 
-    # Z-score normalize labels so MSE loss has meaningful gradients
-    y_mean = y.mean()
-    y_std = y.std()
-    if y_std < 1e-8:
-        y_std = 1.0
-    y = (y - y_mean) / y_std
-
     logger.info("Window slicing: %.1fs", time.time() - t0)
     logger.info(
-        "Dataset shape: X=%s, y=%s | y_mean=%.4f, y_std=%.4f",
+        "Dataset shape: X=%s, y=%s | raw_y_mean=%.4f, raw_y_std=%.4f",
         X.shape,
         y.shape,
-        y_mean,
-        y_std,
+        float(y.mean()),
+        float(y.std()),
     )
     return X, y
+
+
+def normalize_labels_by_train(
+    y_train: np.ndarray, *others: np.ndarray
+) -> Tuple[np.ndarray, ...]:
+    """Apply label normalization using only train-set statistics."""
+    y_mean = y_train.mean()
+    y_std = y_train.std()
+    if y_std < 1e-8:
+        y_std = 1.0
+
+    normalized = [((arr - y_mean) / y_std).astype(np.float32) for arr in (y_train, *others)]
+    logger.info(
+        "Label normalization (train-only): mean=%.4f std=%.4f",
+        float(y_mean),
+        float(y_std),
+    )
+    return tuple(normalized)
 
 
 # ── Training ────────────────────────────────────────────────────────────────
@@ -1208,6 +1210,16 @@ def main():
             X_val = np.concatenate(X_vals)
             y_train = np.concatenate(y_trains)
             y_val = np.concatenate(y_vals)
+
+    # Leakage-safe label normalization: fit only on the train split, then apply
+    # to validation/test. This preserves chronological isolation.
+    if args.load_dataset:
+        logger.info("Loaded pre-normalized dataset from %s", args.load_dataset)
+    else:
+        if args.walk_forward:
+            y_train, y_val, y_test = normalize_labels_by_train(y_train, y_val, y_test)
+        else:
+            y_train, y_val = normalize_labels_by_train(y_train, y_val)
 
         # Save dataset if requested
         if args.save_dataset:

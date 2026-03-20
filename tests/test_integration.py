@@ -110,12 +110,17 @@ class TestFullPipeline:
         monitor, buffer, tracker = _build_pipeline(config)
 
         # Push enough candles to pass warmup, with strong uptrend
-        candles = make_candle_series(80, start_price=100.0, trend=0.8, noise=0.1)
-        await _feed_candles(buffer, candles)
+        candles = make_candle_series(81, start_price=100.0, trend=0.8, noise=0.1)
+        await _feed_candles(buffer, candles[:-1])
 
-        # Run several iterations to let the pipeline trigger
+        # Run several iterations to let the pipeline create an order
         for i in range(1, 20):
             await monitor._process_iteration(i)
+
+        # Market/limit orders in paper mode now execute on the next candle, not
+        # on the signal candle itself. Feed one more bar so the pending order can fill.
+        await buffer.push_candle(candles[-1])
+        await monitor._process_iteration(20)
 
         snap = tracker.snapshot()
         # Either a position was opened or cash decreased (trade happened)

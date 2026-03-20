@@ -126,6 +126,7 @@ class BinanceSupplementaryFeed:
             asyncio.create_task(self._listen_depth()),
             asyncio.create_task(self._listen_funding()),
             asyncio.create_task(self._poll_taker_ratio()),
+            asyncio.create_task(self._poll_open_interest()),
         ]
         await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -209,6 +210,31 @@ class BinanceSupplementaryFeed:
             except Exception as e:
                 logger.warning("Taker ratio poll error: %s", e)
             await asyncio.sleep(300)  # 5 minutes
+
+    async def _poll_open_interest(self) -> None:
+        """Poll open interest every minute."""
+        import aiohttp
+
+        while self._running:
+            try:
+                async with aiohttp.ClientSession() as session:
+                    for symbol in self._symbols:
+                        api_symbol = symbol.replace("/", "")
+                        url = (
+                            f"{self.FUTURES_REST_URL}/fapi/v1/openInterest"
+                            f"?symbol={api_symbol}"
+                        )
+                        try:
+                            async with session.get(url) as resp:
+                                if resp.status == 200:
+                                    data = await resp.json()
+                                    value = float(data.get("openInterest", 0.0))
+                                    await self._buffer.push_open_interest(symbol, value)
+                        except Exception:
+                            pass
+            except Exception as e:
+                logger.warning("Open interest poll error: %s", e)
+            await asyncio.sleep(60)
 
     def _stream_to_symbol(self, raw_symbol: str) -> str:
         """Convert Binance symbol (BTCUSDT) to our format (BTC/USDT)."""
