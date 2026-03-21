@@ -72,6 +72,37 @@ class TestRoostooExecutor:
         assert result.filled_price == pytest.approx(100.25)
 
     @pytest.mark.asyncio
+    async def test_execute_treats_pending_limit_ack_as_submitted(self):
+        executor = RoostooExecutor({"api_key": "key", "api_secret": "secret"})
+        executor._pair_info["WLFI/USDT"] = {"qty_precision": 1, "price_precision": 4}
+        executor._signed_request = AsyncMock(
+            return_value={
+                "Success": True,
+                "OrderDetail": {
+                    "OrderID": "pending-1",
+                    "Quantity": "62.6",
+                    "FilledQuantity": "0",
+                    "FilledAverPrice": "0",
+                    "Price": "0.0799",
+                    "Status": "PENDING",
+                },
+            }
+        )
+
+        order = Order(
+            symbol="WLFI/USDT",
+            side=Side.BUY,
+            order_type=OrderType.LIMIT,
+            quantity=62.6,
+            price=0.0799,
+        )
+        result = await executor.execute(order)
+
+        assert result.status == OrderStatus.SUBMITTED
+        assert result.filled_quantity == 0.0
+        assert result.filled_price is None
+
+    @pytest.mark.asyncio
     async def test_execute_rounds_limit_price_to_symbol_step(self):
         executor = RoostooExecutor({"api_key": "key", "api_secret": "secret"})
         executor._pair_info["WLFI/USDT"] = {
@@ -233,3 +264,48 @@ class TestRoostooExecutor:
         assert order.quantity == pytest.approx(2.0)
         assert order.filled_quantity == pytest.approx(0.75)
         assert order.filled_price == pytest.approx(99.8)
+
+    @pytest.mark.asyncio
+    async def test_get_status_keeps_pending_order_active_without_phantom_fill(self):
+        executor = RoostooExecutor({"api_key": "key", "api_secret": "secret"})
+        executor._signed_request = AsyncMock(
+            return_value={
+                "Success": True,
+                "OrderMatched": [
+                    {
+                        "Status": "PENDING",
+                        "Side": "BUY",
+                        "Type": "LIMIT",
+                        "Quantity": "62.6",
+                        "FilledQuantity": "62.6",
+                        "FilledAverPrice": "0",
+                        "Price": "0.0799",
+                    }
+                ],
+            }
+        )
+
+        order = await executor.get_status("oid-2", "WLFI/USDT")
+
+        assert order.status == OrderStatus.SUBMITTED
+        assert order.quantity == pytest.approx(62.6)
+        assert order.filled_quantity == 0.0
+        assert order.filled_price is None
+
+    @pytest.mark.asyncio
+    async def test_cancel_uses_order_id_only(self):
+        executor = RoostooExecutor({"api_key": "key", "api_secret": "secret"})
+
+        recorded_params = {}
+
+        async def _fake_signed_request(method, endpoint, params):
+            recorded_params.update(params)
+            return {"Success": True}
+
+        executor._signed_request = _fake_signed_request
+
+        result = await executor.cancel("oid-3", "WLFI/USDT")
+
+        assert result.status == OrderStatus.CANCELLED
+        assert recorded_params["order_id"] == "oid-3"
+        assert "pair" not in recorded_params

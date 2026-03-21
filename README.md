@@ -470,8 +470,9 @@ export RUN_ROOSTOO_SMOKE=1
 export RUN_ROOSTOO_ORDER_SMOKE=1
 export ROOSTOO_COMP_API_KEY=...
 export ROOSTOO_COMP_API_SECRET=...
-export ROOSTOO_ORDER_SMOKE_QTY=0.00005
-export ROOSTOO_ORDER_SMOKE_PRICE=1000
+export ROOSTOO_ORDER_SMOKE_SYMBOL=WLFI/USDT
+export ROOSTOO_ORDER_SMOKE_TARGET_NOTIONAL=5
+export ROOSTOO_ORDER_SMOKE_PRICE_RATIO=0.85
 .venv/bin/pytest -q tests/test_roostoo_live_smoke.py -k live_order
 ```
 
@@ -479,6 +480,8 @@ Notes:
 
 - the balance/ticker smoke is the safer default
 - the order smoke is intentionally disabled unless explicitly enabled
+- the order smoke auto-sizes a small limit order, queries its status, and cancels it if it remains open
+- keep `ROOSTOO_ORDER_SMOKE_PRICE_RATIO` inside `(0.7, 1.0)` so the order stays above the venue's live minimum-price restriction
 - if the environment variables are missing, these tests will be skipped
 - `ROOSTOO_BASE_URL` and `ROOSTOO_SMOKE_SYMBOL` are optional overrides
 

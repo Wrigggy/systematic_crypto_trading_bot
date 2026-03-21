@@ -102,31 +102,45 @@ class RoostooExecutor(BaseExecutor):
 
         if data and data.get("Success"):
             order_data = data.get("OrderDetail", {})
-            executed_qty = float(order_data.get("FilledQuantity", order.quantity))
-            order.filled_price = float(order_data.get("FilledAverPrice", 0) or order_data.get("Price", order.price or 0))
-            order.filled_quantity = executed_qty
             order.order_id = str(order_data.get("OrderID", order.order_id))
-            order.filled_at = datetime.utcnow()
-            # Detect partial fills
-            if abs(executed_qty - order.quantity) > 1e-10 and executed_qty < order.quantity:
-                order.status = OrderStatus.PARTIALLY_FILLED
-                logger.info(
-                    "Roostoo order partially filled: %s %s %.6f/%.6f @ %.2f (latency %.0fms)",
-                    order.side.value,
-                    order.symbol,
-                    executed_qty,
-                    order.quantity,
-                    order.filled_price,
-                    latency_ms,
-                )
+            (
+                order.status,
+                order.filled_quantity,
+                order.filled_price,
+            ) = self._interpret_order_state(
+                order_data,
+                requested_quantity=order.quantity,
+                fallback_price=order.price,
+            )
+            if order.status in (OrderStatus.FILLED, OrderStatus.PARTIALLY_FILLED):
+                order.filled_at = datetime.utcnow()
+                if order.status == OrderStatus.PARTIALLY_FILLED:
+                    logger.info(
+                        "Roostoo order partially filled: %s %s %.6f/%.6f @ %.4f (latency %.0fms)",
+                        order.side.value,
+                        order.symbol,
+                        order.filled_quantity,
+                        order.quantity,
+                        order.filled_price or 0.0,
+                        latency_ms,
+                    )
+                else:
+                    logger.info(
+                        "Roostoo order filled: %s %s %.6f @ %.4f (latency %.0fms)",
+                        order.side.value,
+                        order.symbol,
+                        order.filled_quantity,
+                        order.filled_price or 0.0,
+                        latency_ms,
+                    )
             else:
-                order.status = OrderStatus.FILLED
                 logger.info(
-                    "Roostoo order filled: %s %s %.6f @ %.2f (latency %.0fms)",
+                    "Roostoo order accepted: %s %s %.6f @ %s status=%s (latency %.0fms)",
                     order.side.value,
                     order.symbol,
-                    order.filled_quantity,
-                    order.filled_price,
+                    order.quantity,
+                    self._format_number(order.price) if order.price is not None else "MKT",
+                    order.status.value,
                     latency_ms,
                 )
         elif data and not data.get("Success"):
@@ -155,11 +169,9 @@ class RoostooExecutor(BaseExecutor):
 
     async def cancel(self, order_id: str, symbol: str) -> Order:
         """Cancel an order. POST /v3/cancel_order."""
-        roostoo_pair = self.to_roostoo_symbol(symbol)
         timestamp = self._auth.get_timestamp()
 
         params = {
-            "pair": roostoo_pair,
             "order_id": order_id,
             "timestamp": str(timestamp),
         }
@@ -182,11 +194,9 @@ class RoostooExecutor(BaseExecutor):
 
     async def get_status(self, order_id: str, symbol: str) -> Order:
         """Query order status. POST /v3/query_order."""
-        roostoo_pair = self.to_roostoo_symbol(symbol)
         timestamp = self._auth.get_timestamp()
 
         params = {
-            "pair": roostoo_pair,
             "order_id": order_id,
             "timestamp": str(timestamp),
         }
@@ -196,23 +206,21 @@ class RoostooExecutor(BaseExecutor):
             matches = data.get("OrderMatched", [])
             if matches:
                 order_data = matches[0]
-                status_str = order_data.get("Status", "PENDING")
-                status_map = {
-                    "FILLED": OrderStatus.FILLED,
-                    "PARTIALLY_FILLED": OrderStatus.PARTIALLY_FILLED,
-                    "CANCELLED": OrderStatus.CANCELLED,
-                    "NEW": OrderStatus.SUBMITTED,
-                }
-                status = status_map.get(status_str, OrderStatus.PENDING)
+                quantity = self._coerce_float(order_data.get("Quantity"), 0.0)
+                status, filled_quantity, filled_price = self._interpret_order_state(
+                    order_data,
+                    requested_quantity=quantity,
+                    fallback_price=self._coerce_optional_float(order_data.get("Price")),
+                )
                 side_str = order_data.get("Side", "BUY").upper()
                 return Order(
                     order_id=order_id,
                     symbol=symbol,
                     side=Side(side_str),
                     order_type=OrderType(order_data.get("Type", "MARKET")),
-                    quantity=float(order_data.get("Quantity", 0)),
-                    filled_quantity=float(order_data.get("FilledQuantity", 0)),
-                    filled_price=float(order_data.get("FilledAverPrice", 0)) or None,
+                    quantity=quantity,
+                    filled_quantity=filled_quantity,
+                    filled_price=filled_price,
                     status=status,
                 )
 
@@ -312,6 +320,52 @@ class RoostooExecutor(BaseExecutor):
         precision = info.get("qty_precision", 8)
         return round(quantity, precision)
 
+    def _interpret_order_state(
+        self,
+        order_data: Dict[str, Any],
+        *,
+        requested_quantity: float,
+        fallback_price: Optional[float],
+    ) -> tuple[OrderStatus, float, Optional[float]]:
+        """Map Roostoo payloads to internal status and fill semantics.
+
+        The exchange can acknowledge a resting order with `Status=PENDING` and
+        may still echo a non-zero `FilledQuantity` from query responses. Status
+        takes priority so open orders remain active instead of being treated as
+        filled.
+        """
+        status = self._map_exchange_status(order_data.get("Status"))
+        filled_quantity = self._coerce_float(order_data.get("FilledQuantity"), 0.0)
+        avg_price = self._coerce_optional_float(order_data.get("FilledAverPrice"))
+        resting_price = self._coerce_optional_float(order_data.get("Price"))
+        fill_price = avg_price or resting_price or fallback_price
+
+        if status == OrderStatus.FILLED:
+            final_qty = filled_quantity if filled_quantity > 0 else requested_quantity
+            return status, final_qty, fill_price
+
+        if status == OrderStatus.PARTIALLY_FILLED:
+            if filled_quantity <= 0:
+                return OrderStatus.SUBMITTED, 0.0, None
+            return status, min(filled_quantity, requested_quantity), fill_price
+
+        if status == OrderStatus.CANCELLED:
+            final_qty = min(max(filled_quantity, 0.0), requested_quantity)
+            return status, final_qty, fill_price if final_qty > 0 else None
+
+        if status == OrderStatus.SUBMITTED:
+            return status, 0.0, None
+
+        if requested_quantity > 0 and filled_quantity >= requested_quantity - 1e-10:
+            return OrderStatus.FILLED, requested_quantity, fill_price
+        if filled_quantity > 0:
+            return (
+                OrderStatus.PARTIALLY_FILLED,
+                min(filled_quantity, requested_quantity),
+                fill_price,
+            )
+        return OrderStatus.SUBMITTED, 0.0, None
+
     def _round_price(self, symbol: str, price: float) -> float:
         """Round limit price to the pair's published price step or precision."""
         info = self._pair_info.get(symbol, {})
@@ -368,6 +422,32 @@ class RoostooExecutor(BaseExecutor):
             if value > 0:
                 return value
         return None
+
+    @staticmethod
+    def _map_exchange_status(raw_status: Any) -> Optional[OrderStatus]:
+        if raw_status is None:
+            return None
+        status_map = {
+            "FILLED": OrderStatus.FILLED,
+            "PARTIALLY_FILLED": OrderStatus.PARTIALLY_FILLED,
+            "CANCELLED": OrderStatus.CANCELLED,
+            "CANCELED": OrderStatus.CANCELLED,
+            "NEW": OrderStatus.SUBMITTED,
+            "PENDING": OrderStatus.SUBMITTED,
+        }
+        return status_map.get(str(raw_status).upper())
+
+    @staticmethod
+    def _coerce_float(value: Any, default: float = 0.0) -> float:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return default
+
+    @classmethod
+    def _coerce_optional_float(cls, value: Any) -> Optional[float]:
+        parsed = cls._coerce_float(value, 0.0)
+        return parsed or None
 
     async def _signed_request(
         self, method: str, endpoint: str, params: dict
