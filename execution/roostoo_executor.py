@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from decimal import Decimal, InvalidOperation, ROUND_DOWN
 import time
 from datetime import datetime
 from typing import Any, Dict, Optional
@@ -36,7 +37,7 @@ class RoostooExecutor(BaseExecutor):
         api_secret = config.get("api_secret", "")
         self._auth = RoostooAuth(api_key, api_secret)
         self._session: Optional[aiohttp.ClientSession] = None
-        # Pair info cache: symbol -> {min_qty, qty_precision, min_notional}
+        # Pair info cache: symbol -> {min_qty, qty_precision, min_notional, price_precision, price_step}
         self._pair_info: Dict[str, Dict[str, Any]] = {}
         self._trade_logger = None  # set externally via set_trade_logger
 
@@ -91,7 +92,9 @@ class RoostooExecutor(BaseExecutor):
             "timestamp": str(timestamp),
         }
         if order.order_type == OrderType.LIMIT and order.price is not None:
-            params["price"] = str(order.price)
+            normalized_price = self._round_price(order.symbol, order.price)
+            order.price = normalized_price
+            params["price"] = self._format_number(normalized_price)
 
         start_time = time.monotonic()
         data = await self._signed_request("POST", "/v3/place_order", params)
@@ -280,10 +283,27 @@ class RoostooExecutor(BaseExecutor):
         for symbol, info in trade_pairs.items():
             internal = self.to_internal_symbol(symbol)
             qty_precision = int(info.get("AmountPrecision", 8))
+            price_precision = self._extract_optional_int(
+                info,
+                "PricePrecision",
+                "PriceScale",
+                "QuotePrecision",
+                "PriceDecimal",
+            )
+            price_step = self._extract_optional_float(
+                info,
+                "PriceStep",
+                "PriceStepSize",
+                "TickSize",
+                "PriceTick",
+                "PriceTickSize",
+            )
             self._pair_info[internal] = {
                 "min_qty": 10 ** (-qty_precision),
                 "qty_precision": qty_precision,
                 "min_notional": float(info.get("MiniOrder", 0)),
+                "price_precision": price_precision,
+                "price_step": price_step,
             }
 
     def _round_quantity(self, symbol: str, quantity: float) -> float:
@@ -291,6 +311,63 @@ class RoostooExecutor(BaseExecutor):
         info = self._pair_info.get(symbol, {})
         precision = info.get("qty_precision", 8)
         return round(quantity, precision)
+
+    def _round_price(self, symbol: str, price: float) -> float:
+        """Round limit price to the pair's published price step or precision."""
+        info = self._pair_info.get(symbol, {})
+        price_step = info.get("price_step")
+        if price_step is not None and price_step > 0:
+            return self._round_to_step(price, price_step)
+
+        precision = info.get("price_precision")
+        if precision is not None and precision >= 0:
+            return round(price, precision)
+
+        return round(price, 8)
+
+    @staticmethod
+    def _round_to_step(value: float, step: float) -> float:
+        """Round positive values down to a valid exchange step size."""
+        try:
+            value_dec = Decimal(str(value))
+            step_dec = Decimal(str(step))
+        except (InvalidOperation, ValueError):
+            return value
+        if step_dec <= 0:
+            return value
+        scaled = (value_dec / step_dec).to_integral_value(rounding=ROUND_DOWN)
+        return float(scaled * step_dec)
+
+    @staticmethod
+    def _format_number(value: float) -> str:
+        """Format numbers for exchange params without scientific notation."""
+        return format(value, "f").rstrip("0").rstrip(".") or "0"
+
+    @staticmethod
+    def _extract_optional_int(info: Dict[str, Any], *keys: str) -> Optional[int]:
+        for key in keys:
+            raw = info.get(key)
+            if raw in (None, ""):
+                continue
+            try:
+                return int(raw)
+            except (TypeError, ValueError):
+                continue
+        return None
+
+    @staticmethod
+    def _extract_optional_float(info: Dict[str, Any], *keys: str) -> Optional[float]:
+        for key in keys:
+            raw = info.get(key)
+            if raw in (None, "", 0, "0"):
+                continue
+            try:
+                value = float(raw)
+            except (TypeError, ValueError):
+                continue
+            if value > 0:
+                return value
+        return None
 
     async def _signed_request(
         self, method: str, endpoint: str, params: dict

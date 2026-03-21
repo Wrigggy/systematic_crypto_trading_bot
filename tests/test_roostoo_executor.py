@@ -72,6 +72,42 @@ class TestRoostooExecutor:
         assert result.filled_price == pytest.approx(100.25)
 
     @pytest.mark.asyncio
+    async def test_execute_rounds_limit_price_to_symbol_step(self):
+        executor = RoostooExecutor({"api_key": "key", "api_secret": "secret"})
+        executor._pair_info["WLFI/USDT"] = {
+            "qty_precision": 4,
+            "price_step": 0.05,
+        }
+
+        recorded_params = {}
+
+        async def _fake_signed_request(method, endpoint, params):
+            recorded_params.update(params)
+            return {
+                "Success": True,
+                "OrderDetail": {
+                    "OrderID": "limit-1",
+                    "FilledQuantity": "1.0",
+                    "Price": params["price"],
+                },
+            }
+
+        executor._signed_request = _fake_signed_request
+
+        order = Order(
+            symbol="WLFI/USDT",
+            side=Side.BUY,
+            order_type=OrderType.LIMIT,
+            quantity=1.0,
+            price=1.237,
+        )
+        result = await executor.execute(order)
+
+        assert recorded_params["price"] == "1.2"
+        assert result.price == pytest.approx(1.2)
+        assert result.status == OrderStatus.FILLED
+
+    @pytest.mark.asyncio
     async def test_get_balance_parses_spot_wallet(self):
         executor = RoostooExecutor({"api_key": "key", "api_secret": "secret"})
         executor._signed_request = AsyncMock(
@@ -126,7 +162,12 @@ class TestRoostooExecutor:
         executor.get_exchange_info = AsyncMock(
             return_value={
                 "TradePairs": {
-                    "BTC/USD": {"AmountPrecision": 4, "MiniOrder": "10"},
+                    "BTC/USD": {
+                        "AmountPrecision": 4,
+                        "MiniOrder": "10",
+                        "PricePrecision": 2,
+                        "TickSize": "0.5",
+                    },
                     "ETH/USD": {"AmountPrecision": 3, "MiniOrder": "5"},
                 }
             }
@@ -138,11 +179,15 @@ class TestRoostooExecutor:
             "min_qty": pytest.approx(0.0001),
             "qty_precision": 4,
             "min_notional": pytest.approx(10.0),
+            "price_precision": 2,
+            "price_step": pytest.approx(0.5),
         }
         assert executor._pair_info["ETH/USDT"] == {
             "min_qty": pytest.approx(0.001),
             "qty_precision": 3,
             "min_notional": pytest.approx(5.0),
+            "price_precision": None,
+            "price_step": None,
         }
 
     @pytest.mark.asyncio
