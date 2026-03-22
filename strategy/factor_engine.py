@@ -27,6 +27,8 @@ class FactorEngine:
             "trend_alignment": 0.28,
             "momentum_impulse": 0.22,
             "breakout_confirmation": 0.12,
+            "pullback_reentry": 0.0,
+            "overextension_exit": 0.0,
             "volume_confirmation": 0.15,
             "liquidity_balance": 0.10,
             "perp_crowding": 0.15,
@@ -57,6 +59,50 @@ class FactorEngine:
         )
         self._min_trend_slope: float = trend_cfg.get("min_trend_slope", 0.0005)
         self._min_volume_zscore: float = trend_cfg.get("min_volume_zscore", -0.25)
+        self._enable_pullback_reentry: bool = strategy_cfg.get(
+            "enable_pullback_reentry", False
+        )
+        self._pullback_min_breakout_distance: float = strategy_cfg.get(
+            "pullback_min_breakout_distance", -0.65
+        )
+        self._pullback_max_breakout_distance: float = strategy_cfg.get(
+            "pullback_max_breakout_distance", 0.20
+        )
+        self._pullback_target_breakout_distance: float = strategy_cfg.get(
+            "pullback_target_breakout_distance", -0.10
+        )
+        self._pullback_min_rsi: float = strategy_cfg.get("pullback_min_rsi", 40.0)
+        self._pullback_max_rsi: float = strategy_cfg.get("pullback_max_rsi", 60.0)
+        self._pullback_target_rsi: float = strategy_cfg.get(
+            "pullback_target_rsi", 52.0
+        )
+        self._pullback_min_momentum: float = strategy_cfg.get(
+            "pullback_min_momentum", -0.02
+        )
+        self._pullback_max_momentum: float = strategy_cfg.get(
+            "pullback_max_momentum", 0.01
+        )
+        self._pullback_min_volume_ratio: float = strategy_cfg.get(
+            "pullback_min_volume_ratio", 0.75
+        )
+        self._pullback_trend_slack: float = strategy_cfg.get(
+            "pullback_trend_slack", 0.70
+        )
+        self._enable_overextension_exit: bool = strategy_cfg.get(
+            "enable_overextension_exit", False
+        )
+        self._overextension_min_breakout_distance: float = strategy_cfg.get(
+            "overextension_min_breakout_distance", 0.50
+        )
+        self._overextension_min_rsi: float = strategy_cfg.get(
+            "overextension_min_rsi", 68.0
+        )
+        self._overextension_min_volume_zscore: float = strategy_cfg.get(
+            "overextension_min_volume_zscore", 0.0
+        )
+        self._overextension_min_taker_ratio: float = strategy_cfg.get(
+            "overextension_min_taker_ratio", 1.02
+        )
 
     def evaluate(
         self,
@@ -74,6 +120,8 @@ class FactorEngine:
             self._trend_alignment(features, candles_15m, candles_1h),
             self._momentum_impulse(features),
             self._breakout_confirmation(features),
+            self._pullback_reentry(features),
+            self._overextension_exit(features, supp),
             self._volume_confirmation(features),
             self._liquidity_balance(features, supp),
             self._perp_crowding(features, supp, hist),
@@ -283,6 +331,102 @@ class FactorEngine:
             metadata={"volume_ratio": features.volume_ratio},
         )
 
+    def _pullback_reentry(self, features: FeatureVector) -> FactorObservation:
+        breakout_distance = float(features.raw.get("breakout_distance", 0.0))
+        trend_slope = float(features.raw.get("trend_slope", 0.0))
+        ema_spread = (
+            (features.ema_fast - features.ema_slow) / features.ema_slow
+            if features.ema_slow > 0
+            else 0.0
+        )
+
+        if not self._enable_pullback_reentry:
+            return FactorObservation(
+                symbol=features.symbol,
+                name="pullback_reentry",
+                category="entry_timing",
+                timestamp=features.timestamp,
+                bias=FactorBias.NEUTRAL,
+                strength=0.0,
+                value=breakout_distance,
+                threshold=self._pullback_max_breakout_distance,
+                horizon_minutes=120,
+                expected_move_bps=0.0,
+                thesis="Pullback re-entry disabled",
+                invalidate_condition="Pullback re-entry becomes enabled",
+                metadata={},
+            )
+
+        trend_floor = self._min_trend_slope * self._pullback_trend_slack
+        bias = FactorBias.NEUTRAL
+        strength = 0.0
+
+        if (
+            ema_spread > 0
+            and trend_slope >= trend_floor
+            and self._pullback_min_breakout_distance
+            <= breakout_distance
+            <= self._pullback_max_breakout_distance
+            and self._pullback_min_rsi <= features.rsi <= self._pullback_max_rsi
+            and self._pullback_min_momentum
+            <= features.momentum
+            <= self._pullback_max_momentum
+            and features.volume_ratio >= self._pullback_min_volume_ratio
+        ):
+            distance_width = max(
+                self._pullback_max_breakout_distance
+                - self._pullback_min_breakout_distance,
+                1e-6,
+            )
+            rsi_width = max(self._pullback_max_rsi - self._pullback_min_rsi, 1e-6)
+            distance_score = 1.0 - min(
+                abs(breakout_distance - self._pullback_target_breakout_distance)
+                / max(distance_width * 0.5, 1e-6),
+                1.0,
+            )
+            rsi_score = 1.0 - min(
+                abs(features.rsi - self._pullback_target_rsi)
+                / max(rsi_width * 0.5, 1e-6),
+                1.0,
+            )
+            trend_score = _clamp(
+                (trend_slope - trend_floor) / max(abs(trend_floor) * 3.0, 1e-6)
+            )
+            ema_score = _clamp(ema_spread / 0.01)
+            strength = _clamp(
+                0.35 * distance_score
+                + 0.20 * rsi_score
+                + 0.25 * trend_score
+                + 0.20 * ema_score
+            )
+            bias = FactorBias.BULLISH
+
+        return FactorObservation(
+            symbol=features.symbol,
+            name="pullback_reentry",
+            category="entry_timing",
+            timestamp=features.timestamp,
+            bias=bias,
+            strength=strength if bias == FactorBias.BULLISH else 0.0,
+            value=breakout_distance,
+            threshold=self._pullback_max_breakout_distance,
+            horizon_minutes=120,
+            expected_move_bps=40.0 + 110.0 * strength,
+            thesis=(
+                f"Trend pullback {breakout_distance:.2f} ATR with RSI {features.rsi:.1f}, "
+                f"momentum {features.momentum:.4f}, slope {trend_slope:.4f}"
+            ),
+            invalidate_condition="EMA spread collapses, pullback becomes a breakdown, or price re-extends without confirmation",
+            metadata={
+                "breakout_distance": breakout_distance,
+                "rsi": features.rsi,
+                "momentum": features.momentum,
+                "trend_slope": trend_slope,
+                "ema_spread": ema_spread,
+                "volume_ratio": features.volume_ratio,
+            },
+        )
+
     def _breakout_confirmation(self, features: FeatureVector) -> FactorObservation:
         breakout_distance = float(features.raw.get("breakout_distance", 0.0))
         trend_slope = float(features.raw.get("trend_slope", 0.0))
@@ -341,6 +485,94 @@ class FactorEngine:
                 "breakout_distance": breakout_distance,
                 "trend_slope": trend_slope,
                 "volume_zscore": volume_zscore,
+            },
+        )
+
+    def _overextension_exit(
+        self,
+        features: FeatureVector,
+        supplementary: dict,
+    ) -> FactorObservation:
+        breakout_distance = float(features.raw.get("breakout_distance", 0.0))
+        volume_zscore = float(features.raw.get("volume_zscore", 0.0))
+        taker_ratio = supplementary.get("taker_ratio", features.taker_ratio)
+        funding_rate = supplementary.get("funding_rate", features.funding_rate)
+
+        if not self._enable_overextension_exit:
+            return FactorObservation(
+                symbol=features.symbol,
+                name="overextension_exit",
+                category="risk",
+                timestamp=features.timestamp,
+                bias=FactorBias.NEUTRAL,
+                strength=0.0,
+                value=breakout_distance,
+                threshold=self._overextension_min_breakout_distance,
+                horizon_minutes=60,
+                expected_move_bps=0.0,
+                thesis="Overextension exit disabled",
+                invalidate_condition="Overextension exit becomes enabled",
+                metadata={},
+            )
+
+        bias = FactorBias.NEUTRAL
+        strength = 0.0
+        if (
+            breakout_distance >= self._overextension_min_breakout_distance
+            and features.rsi >= self._overextension_min_rsi
+            and (
+                volume_zscore >= self._overextension_min_volume_zscore
+                or taker_ratio >= self._overextension_min_taker_ratio
+            )
+        ):
+            distance_score = _clamp(
+                (breakout_distance - self._overextension_min_breakout_distance)
+                / max(self._overextension_min_breakout_distance + 0.75, 1e-6)
+            )
+            rsi_score = _clamp(
+                (features.rsi - self._overextension_min_rsi)
+                / max(85.0 - self._overextension_min_rsi, 1e-6)
+            )
+            volume_score = _clamp(
+                (volume_zscore - self._overextension_min_volume_zscore + 1.0) / 3.0
+            )
+            taker_score = _clamp(
+                (taker_ratio - self._overextension_min_taker_ratio) / 0.20
+            )
+            funding_score = _clamp(
+                max(funding_rate, 0.0) / max(self._max_funding_rate * 2.0, 1e-6)
+            )
+            strength = _clamp(
+                0.35 * distance_score
+                + 0.25 * rsi_score
+                + 0.15 * volume_score
+                + 0.15 * taker_score
+                + 0.10 * funding_score
+            )
+            bias = FactorBias.BEARISH
+
+        return FactorObservation(
+            symbol=features.symbol,
+            name="overextension_exit",
+            category="risk",
+            timestamp=features.timestamp,
+            bias=bias,
+            strength=strength if bias == FactorBias.BEARISH else 0.0,
+            value=breakout_distance,
+            threshold=self._overextension_min_breakout_distance,
+            horizon_minutes=60,
+            expected_move_bps=20.0 + 90.0 * strength,
+            thesis=(
+                f"Overextension {breakout_distance:.2f} ATR with RSI {features.rsi:.1f}, "
+                f"volume z-score {volume_zscore:.2f}, taker ratio {taker_ratio:.3f}"
+            ),
+            invalidate_condition="Price cools back toward the breakout base and momentum pressure normalizes",
+            metadata={
+                "breakout_distance": breakout_distance,
+                "rsi": features.rsi,
+                "volume_zscore": volume_zscore,
+                "taker_ratio": taker_ratio,
+                "funding_rate": funding_rate,
             },
         )
 

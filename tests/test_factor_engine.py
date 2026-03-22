@@ -141,3 +141,83 @@ class TestFactorEngine:
             "open_interest_change"
         ]
         assert short_snapshot.blocker_score == long_snapshot.blocker_score
+
+    def test_pullback_reentry_turns_bullish_for_trend_dip(self):
+        engine = FactorEngine(
+            {
+                "strategy": {
+                    "enable_pullback_reentry": True,
+                    "pullback_min_breakout_distance": -0.60,
+                    "pullback_max_breakout_distance": 0.20,
+                    "pullback_min_rsi": 42.0,
+                    "pullback_max_rsi": 60.0,
+                    "pullback_min_momentum": -0.02,
+                    "pullback_max_momentum": 0.01,
+                    "pullback_min_volume_ratio": 0.80,
+                    "pullback_trend_slack": 0.70,
+                    "factor_weights": {
+                        "pullback_reentry": 0.25,
+                        "trend_alignment": 0.25,
+                        "market_regime": 0.20,
+                    },
+                },
+                "regime": {"enabled": True},
+                "trend": {"min_trend_slope": 0.0006},
+            }
+        )
+        snapshot = engine.evaluate(
+            _feature_vector(
+                rsi=51.0,
+                momentum=-0.004,
+                volume_ratio=0.92,
+                raw={
+                    "breakout_distance": -0.18,
+                    "trend_slope": 0.0011,
+                    "volume_zscore": 0.25,
+                    "realized_vol_short": 0.008,
+                },
+            ),
+            market_context={"regime": "risk_on", "score": 0.40, "breadth": 0.65},
+            candles_15m=_candles(100.0, 0.3, 4),
+            candles_1h=_candles(100.0, 0.6, 4),
+        )
+        pullback = next(
+            obs for obs in snapshot.observations if obs.name == "pullback_reentry"
+        )
+        assert pullback.bias == FactorBias.BULLISH
+        assert pullback.strength > 0.0
+
+    def test_overextension_exit_turns_bearish_for_stretched_move(self):
+        engine = FactorEngine(
+            {
+                "strategy": {
+                    "enable_overextension_exit": True,
+                    "overextension_min_breakout_distance": 0.45,
+                    "overextension_min_rsi": 67.0,
+                    "overextension_min_volume_zscore": -0.10,
+                    "overextension_min_taker_ratio": 1.01,
+                    "factor_weights": {"overextension_exit": 0.25},
+                }
+            }
+        )
+        snapshot = engine.evaluate(
+            _feature_vector(
+                rsi=73.0,
+                taker_ratio=1.08,
+                raw={
+                    "breakout_distance": 0.82,
+                    "trend_slope": 0.0018,
+                    "volume_zscore": 0.85,
+                    "realized_vol_short": 0.010,
+                },
+            ),
+            supplementary={
+                "taker_ratio": 1.08,
+                "funding_rate": 0.0002,
+            },
+        )
+        overextension = next(
+            obs for obs in snapshot.observations if obs.name == "overextension_exit"
+        )
+        assert overextension.bias == FactorBias.BEARISH
+        assert overextension.strength > 0.0

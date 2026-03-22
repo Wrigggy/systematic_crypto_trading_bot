@@ -100,6 +100,20 @@ class TestStrategyProfiles:
         assert config["strategy"]["use_model_overlay"] is False
         assert config["regime"]["enabled"] is True
 
+    def test_apply_trend_pullback_profile_enables_t_style_factors(self):
+        config = {
+            "alpha": {"engine": "ensemble", "resample_minutes": 1},
+            "strategy": {"use_model_overlay": True},
+        }
+
+        _apply_strategy_profile(config, "trend_pullback_t_v1")
+
+        assert config["strategy"]["profile"] == "trend_pullback_t_v1"
+        assert config["alpha"]["engine"] == "rule_based"
+        assert config["strategy"]["enable_pullback_reentry"] is True
+        assert config["strategy"]["enable_overextension_exit"] is True
+        assert config["risk"]["max_portfolio_exposure"] == pytest.approx(0.05)
+
 
 class TestRoostooStartingCapital:
     def test_uses_free_usd_balance_when_available(self):
