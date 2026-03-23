@@ -761,14 +761,16 @@ class FactorEngine:
 
         if bb_width < self._bb_min_width or bb_middle <= 0:
             pass
-        elif bb_pctb <= 0.0 and rsi_value < self._bb_rsi_oversold and hourly_trend_bullish:
-            depth = max(0.0, -bb_pctb)
+        elif bb_pctb <= 0.15 and rsi_value < self._bb_rsi_oversold and hourly_trend_bullish:
+            # Price near or below lower band (pctb <= 0.15 means within bottom 15% of bands)
+            depth = max(0.0, 0.15 - bb_pctb)
             rsi_extremity = _clamp((self._bb_rsi_oversold - rsi_value) / 15.0)
-            strength = _clamp(0.6 * min(depth / 0.5, 1.0) + 0.4 * rsi_extremity)
+            strength = _clamp(0.6 * min(depth / 0.3, 1.0) + 0.4 * rsi_extremity)
             bias = FactorBias.BULLISH
-        elif bb_pctb >= 1.0:
-            overshoot = bb_pctb - 1.0
-            strength = _clamp(overshoot / 0.5)
+        elif bb_pctb >= 0.85:
+            # Price near or above upper band (for exit scoring)
+            overshoot = bb_pctb - 0.85
+            strength = _clamp(overshoot / 0.3)
             bias = FactorBias.BEARISH
 
         return FactorObservation(

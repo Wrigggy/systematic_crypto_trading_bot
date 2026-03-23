@@ -418,7 +418,7 @@ STRATEGY_PROFILES: dict[str, dict] = {
             "max_volatility": 0.025,
             "bb_period": 20,
             "bb_std_dev": 2.0,
-            "bb_rsi_oversold": 35,
+            "bb_rsi_oversold": 40,
             "bb_rsi_deeply_oversold": 25,
             "bb_max_hold_hours": 24,
             "bb_min_width": 0.02,
