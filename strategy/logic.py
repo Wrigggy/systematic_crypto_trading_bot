@@ -112,6 +112,9 @@ class StrategyLogic:
         self._require_trend_alignment: bool = strategy_cfg.get(
             "require_trend_alignment", True
         )
+        self._require_bollinger_signal: bool = strategy_cfg.get(
+            "require_bollinger_signal", False
+        )
         self._neutral_entry_size_multiplier: float = strategy_cfg.get(
             "neutral_entry_size_multiplier", 0.5
         )
@@ -735,6 +738,8 @@ class StrategyLogic:
         if len(categories) < self._min_supporting_categories:
             return False
         if self._require_trend_alignment and "trend_alignment" not in factors.supporting_factors:
+            return False
+        if self._require_bollinger_signal and "bollinger_mean_reversion" not in factors.supporting_factors:
             return False
         return True
 
