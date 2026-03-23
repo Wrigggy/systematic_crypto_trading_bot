@@ -132,7 +132,7 @@ class FactorEngine:
             self._liquidity_balance(features, supp),
             self._perp_crowding(features, supp, hist),
             self._volatility_regime(features),
-            self._bollinger_mean_reversion(features, candles_1h),
+            self._bollinger_mean_reversion(features, candles_15m, candles_1h),
         ]
 
         support_weight = 0.0
@@ -717,13 +717,37 @@ class FactorEngine:
     def _bollinger_mean_reversion(
         self,
         features: FeatureVector,
+        candles_15m: Optional[List[OHLCV]] = None,
         candles_1h: Optional[List[OHLCV]] = None,
     ) -> FactorObservation:
-        bb_upper = float(features.raw.get("bb_upper", 0.0))
-        bb_middle = float(features.raw.get("bb_middle", 0.0))
-        bb_lower = float(features.raw.get("bb_lower", 0.0))
-        bb_width = float(features.raw.get("bb_width", 0.0))
-        bb_pctb = float(features.raw.get("bb_pctb", 0.5))
+        # Compute BB from 15m candles if available (preferred), else fall back to features.raw
+        if candles_15m and len(candles_15m) >= self._bb_period:
+            import numpy as np
+            closes_15m = [c.close for c in candles_15m]
+            window = closes_15m[-self._bb_period:]
+            bb_middle = float(np.mean(window))
+            bb_std = float(np.std(window))
+            bb_upper = bb_middle + self._bb_std_dev * bb_std
+            bb_lower = bb_middle - self._bb_std_dev * bb_std
+            bb_width = (bb_upper - bb_lower) / bb_middle if bb_middle > 0 else 0.0
+            current_close = closes_15m[-1]
+            bb_pctb = (
+                (current_close - bb_lower) / (bb_upper - bb_lower)
+                if (bb_upper - bb_lower) > 1e-10
+                else 0.5
+            )
+        else:
+            bb_upper = float(features.raw.get("bb_upper", 0.0))
+            bb_middle = float(features.raw.get("bb_middle", 0.0))
+            bb_lower = float(features.raw.get("bb_lower", 0.0))
+            bb_width = float(features.raw.get("bb_width", 0.0))
+            bb_pctb = float(features.raw.get("bb_pctb", 0.5))
+
+        # Use RSI from 15m candles if available, else from features (5m)
+        rsi_value = features.rsi
+        if candles_15m and len(candles_15m) >= 16:
+            closes_15m_rsi = [c.close for c in candles_15m]
+            rsi_value = self._compute_rsi_value(closes_15m_rsi, 14)
 
         hourly_trend_bullish = True
         if candles_1h and len(candles_1h) >= 30:
@@ -737,9 +761,9 @@ class FactorEngine:
 
         if bb_width < self._bb_min_width or bb_middle <= 0:
             pass
-        elif bb_pctb <= 0.0 and features.rsi < self._bb_rsi_oversold and hourly_trend_bullish:
+        elif bb_pctb <= 0.0 and rsi_value < self._bb_rsi_oversold and hourly_trend_bullish:
             depth = max(0.0, -bb_pctb)
-            rsi_extremity = _clamp((self._bb_rsi_oversold - features.rsi) / 15.0)
+            rsi_extremity = _clamp((self._bb_rsi_oversold - rsi_value) / 15.0)
             strength = _clamp(0.6 * min(depth / 0.5, 1.0) + 0.4 * rsi_extremity)
             bias = FactorBias.BULLISH
         elif bb_pctb >= 1.0:
@@ -758,9 +782,9 @@ class FactorEngine:
             threshold=0.0,
             horizon_minutes=480,
             expected_move_bps=80.0 + 200.0 * strength,
-            thesis=f"BB %B={bb_pctb:.2f}, width={bb_width:.4f}, RSI={features.rsi:.1f}, 1h_trend={'up' if hourly_trend_bullish else 'down'}",
+            thesis=f"BB %B={bb_pctb:.2f}, width={bb_width:.4f}, RSI={rsi_value:.1f}, 1h_trend={'up' if hourly_trend_bullish else 'down'}",
             invalidate_condition="Price returns to middle band or 1h trend reverses",
-            metadata={"bb_pctb": bb_pctb, "bb_width": bb_width, "bb_upper": bb_upper, "bb_middle": bb_middle, "bb_lower": bb_lower, "rsi": features.rsi, "hourly_trend_bullish": hourly_trend_bullish},
+            metadata={"bb_pctb": bb_pctb, "bb_width": bb_width, "bb_upper": bb_upper, "bb_middle": bb_middle, "bb_lower": bb_lower, "rsi": rsi_value, "hourly_trend_bullish": hourly_trend_bullish},
         )
 
     @staticmethod
@@ -772,3 +796,19 @@ class FactorEngine:
         for val in values[1:]:
             ema = val * multiplier + ema * (1 - multiplier)
         return ema
+
+    @staticmethod
+    def _compute_rsi_value(closes: list[float], period: int = 14) -> float:
+        """Compute RSI from a list of closes."""
+        if len(closes) < period + 1:
+            return 50.0
+        import numpy as np
+        deltas = np.diff(closes[-(period + 1):])
+        gains = np.where(deltas > 0, deltas, 0.0)
+        losses = np.where(deltas < 0, -deltas, 0.0)
+        avg_gain = float(np.mean(gains))
+        avg_loss = float(np.mean(losses))
+        if avg_loss < 1e-10:
+            return 100.0
+        rs = avg_gain / avg_loss
+        return 100.0 - 100.0 / (1.0 + rs)
