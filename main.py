@@ -421,7 +421,7 @@ STRATEGY_PROFILES: dict[str, dict] = {
             "bb_rsi_oversold": 40,
             "bb_rsi_deeply_oversold": 25,
             "bb_max_hold_hours": 24,
-            "bb_min_width": 0.02,
+            "bb_min_width": 0.004,
             "exit_tiers": [
                 {"threshold": 0.40, "sell_pct": 0.50},
                 {"threshold": 0.70, "sell_pct": 1.00},
