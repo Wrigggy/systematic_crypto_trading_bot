@@ -5,6 +5,8 @@ import time
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Dict, Optional, Set
 
+import numpy as np
+
 from core.models import OHLCV, Order, OrderStatus, Side, StrategyState
 from data.buffer import LiveBuffer
 from data.resampler import CandleResampler, MultiResampler
@@ -70,6 +72,7 @@ class StrategyMonitor:
             "use_model_overlay", False
         )
         strategy_cfg = config.get("strategy", {})
+        risk_cfg = config.get("risk", {})
         default_slot_count = max(len(config.get("symbols", [])), 1)
         self._core_symbols: Set[str] = set(strategy_cfg.get("core_symbols", []))
         self._satellite_symbols: Set[str] = set(
@@ -100,6 +103,89 @@ class StrategyMonitor:
         )
         self._core_priority_bonus: float = float(
             strategy_cfg.get("core_priority_bonus", 0.0)
+        )
+        self._portfolio_targeting_enabled: bool = bool(
+            strategy_cfg.get("portfolio_targeting_enabled", True)
+        )
+        self._portfolio_rank_weight_power: float = float(
+            strategy_cfg.get("portfolio_rank_weight_power", 1.0)
+        )
+        self._portfolio_max_rank_size_multiplier: float = float(
+            strategy_cfg.get("portfolio_max_rank_size_multiplier", 1.0)
+        )
+        self._relative_strength_enabled: bool = bool(
+            strategy_cfg.get("relative_strength_enabled", True)
+        )
+        self._relative_strength_lookback_bars: int = max(
+            5, int(strategy_cfg.get("relative_strength_lookback_bars", 36))
+        )
+        self._relative_strength_vol_window: int = max(
+            self._relative_strength_lookback_bars + 1,
+            int(strategy_cfg.get("relative_strength_vol_window", 72)),
+        )
+        self._relative_strength_vol_percentile: float = float(
+            strategy_cfg.get("relative_strength_vol_percentile", 0.80)
+        )
+        self._relative_strength_weight: float = float(
+            strategy_cfg.get("relative_strength_weight", 0.10)
+        )
+        self._relative_strength_weak_penalty: float = float(
+            strategy_cfg.get("relative_strength_weak_penalty", 0.08)
+        )
+        self._relative_strength_min_score: float = float(
+            strategy_cfg.get("relative_strength_min_score", -0.25)
+        )
+        self._volume_weighted_momentum_enabled: bool = bool(
+            strategy_cfg.get("volume_weighted_momentum_enabled", False)
+        )
+        self._volume_momentum_short_window: int = max(
+            2, int(strategy_cfg.get("volume_momentum_short_window", 6))
+        )
+        self._volume_momentum_long_window: int = max(
+            self._volume_momentum_short_window + 1,
+            int(strategy_cfg.get("volume_momentum_long_window", 24)),
+        )
+        self._volume_ratio_cap: float = max(
+            1.0, float(strategy_cfg.get("volume_ratio_cap", 2.5))
+        )
+        self._volume_weighted_momentum_weight: float = float(
+            strategy_cfg.get("volume_weighted_momentum_weight", 0.0)
+        )
+        self._volume_weighted_momentum_min_score: float = float(
+            strategy_cfg.get("volume_weighted_momentum_min_score", -999.0)
+        )
+        self._candidate_cohort_gate_enabled: bool = bool(
+            strategy_cfg.get("candidate_cohort_gate_enabled", False)
+        )
+        self._no_trade_min_candidate_score: float = float(
+            strategy_cfg.get("no_trade_min_candidate_score", 0.0)
+        )
+        self._no_trade_min_score_margin: float = float(
+            strategy_cfg.get("no_trade_min_score_margin", 0.0)
+        )
+        self._symbol_performance_enabled: bool = bool(
+            strategy_cfg.get("symbol_performance_enabled", True)
+        )
+        self._symbol_performance_weight: float = float(
+            strategy_cfg.get("symbol_performance_weight", 0.18)
+        )
+        self._core_underperformance_penalty: float = float(
+            strategy_cfg.get("core_underperformance_penalty", 0.03)
+        )
+        self._satellite_underperformance_penalty: float = float(
+            strategy_cfg.get("satellite_underperformance_penalty", 0.05)
+        )
+        self._core_underperformance_threshold: float = float(
+            strategy_cfg.get("core_underperformance_threshold", -0.01)
+        )
+        self._satellite_underperformance_threshold: float = float(
+            strategy_cfg.get("satellite_underperformance_threshold", 0.00)
+        )
+        self._max_portfolio_exposure_ratio: float = float(
+            risk_cfg.get("max_portfolio_exposure", 1.0)
+        )
+        self._max_single_exposure_ratio: float = float(
+            risk_cfg.get("max_single_exposure", 1.0)
         )
         self._primary_minutes = 1
         if multi_resampler is not None:
@@ -407,6 +493,7 @@ class StrategyMonitor:
                             "intent": intent,
                             "current_price": candles[-1].close,
                             "factor_snapshot": factor_snapshot,
+                            "strategy_candles": strategy_candles,
                         }
                     )
                     continue
@@ -427,7 +514,13 @@ class StrategyMonitor:
                     market_price=candles[-1].close,
                 )
                 if validated is not None:
-                    result = await self._order_manager.submit(validated)
+                    if self._has_pending_side_order(validated.symbol, Side.SELL):
+                        logger.info(
+                            "[%s] skipping duplicate sell submission because an exit order is already pending",
+                            validated.symbol,
+                        )
+                    else:
+                        await self._order_manager.submit(validated)
                 else:
                     # Risk rejected the order — reset strategy state
                     strategy.on_cancel(order)
@@ -443,9 +536,8 @@ class StrategyMonitor:
             )
 
         for idx, candidate in enumerate(selected_buy_candidates):
-            unsubmitted_symbols = {
-                item["symbol"] for item in selected_buy_candidates[idx:]
-            }
+            remaining_candidates = selected_buy_candidates[idx:]
+            unsubmitted_symbols = {item["symbol"] for item in remaining_candidates}
             if (
                 self._active_symbol_count(exclude_symbols=unsubmitted_symbols)
                 >= self._max_active_positions
@@ -474,6 +566,17 @@ class StrategyMonitor:
                 intent,
                 current_price=current_price,
             )
+            instruction = self._apply_portfolio_entry_targeting(
+                candidate,
+                instruction,
+                remaining_candidates,
+            )
+            if instruction.quantity <= 0:
+                self._cancel_buy_candidate(
+                    candidate,
+                    "portfolio target sizing reduced the entry below minimum tradable size",
+                )
+                continue
             if self._trade_logger is not None:
                 await self._trade_logger.log_trade_instruction(
                     instruction.model_dump(mode="json")
@@ -486,6 +589,12 @@ class StrategyMonitor:
                 market_price=current_price,
             )
             if validated is not None:
+                if self._has_pending_side_order(validated.symbol, Side.SELL):
+                    self._cancel_buy_candidate(
+                        candidate,
+                        "exit order already pending for this symbol",
+                    )
+                    continue
                 await self._order_manager.submit(validated)
             else:
                 strategy.on_cancel(order)
@@ -495,6 +604,13 @@ class StrategyMonitor:
             self._tracker, latest_candles, atr_values
         )
         for stop_order in stop_orders:
+            if self._has_pending_side_order(stop_order.symbol, Side.SELL):
+                self._mark_strategy_exit_pending(stop_order.symbol)
+                logger.info(
+                    "[%s] stop already armed via pending sell order, skipping duplicate stop submission",
+                    stop_order.symbol,
+                )
+                continue
             validated = self._risk_shield.validate(
                 stop_order,
                 self._tracker,
@@ -505,9 +621,7 @@ class StrategyMonitor:
             )
             if validated is not None:
                 await self._order_manager.submit(validated)
-                # Update strategy state
-                if stop_order.symbol in self._strategies:
-                    self._strategies[stop_order.symbol].force_flat()
+                self._mark_strategy_exit_pending(stop_order.symbol)
 
         # Circuit breaker check
         if self._risk_shield.check_circuit_breaker(self._tracker):
@@ -579,6 +693,7 @@ class StrategyMonitor:
     def _rank_buy_candidates(
         self, candidates: list[dict[str, Any]]
     ) -> list[dict[str, Any]]:
+        self._annotate_buy_candidates(candidates)
         ranked: list[dict[str, Any]] = []
         for candidate in candidates:
             reason = self._buy_candidate_rejection_reason(candidate)
@@ -587,6 +702,7 @@ class StrategyMonitor:
                 continue
             ranked.append(candidate)
         ranked.sort(key=self._candidate_priority_score, reverse=True)
+        ranked = self._apply_candidate_cohort_gate(ranked)
         return ranked
 
     def _buy_candidate_rejection_reason(
@@ -606,6 +722,22 @@ class StrategyMonitor:
             < (self._min_entry_score + self._satellite_min_entry_score_bonus)
         ):
             return "satellite entry score below stricter threshold"
+        metrics = candidate.get("selection_metrics", {})
+        if self._relative_strength_enabled:
+            if not metrics.get("passes_vol_filter", True):
+                return "vol-adjusted momentum filter blocked entry"
+            if metrics.get("vol_adjusted_momentum", 0.0) < self._relative_strength_min_score:
+                return "relative strength score too weak"
+        if self._volume_weighted_momentum_enabled and (
+            metrics.get("volume_weighted_momentum", 0.0)
+            < self._volume_weighted_momentum_min_score
+        ):
+            return "volume-weighted momentum score too weak"
+        performance_penalty = self._dynamic_entry_penalty(symbol)
+        if performance_penalty > 0 and snapshot.entry_score < (
+            self._min_entry_score + performance_penalty
+        ):
+            return "symbol underperformance raised the entry threshold"
         return None
 
     def _candidate_priority_score(self, candidate: dict[str, Any]) -> float:
@@ -614,19 +746,274 @@ class StrategyMonitor:
         score = snapshot.entry_score - 0.5 * snapshot.blocker_score
         if symbol in self._core_symbols:
             score += self._core_priority_bonus
+        metrics = candidate.get("selection_metrics", {})
+        if self._relative_strength_enabled:
+            score += self._relative_strength_weight * metrics.get(
+                "relative_strength_zscore", 0.0
+            )
+            if metrics.get("vol_adjusted_momentum", 0.0) < 0:
+                score -= self._relative_strength_weak_penalty
+        if self._volume_weighted_momentum_enabled:
+            score += self._volume_weighted_momentum_weight * metrics.get(
+                "volume_weighted_momentum_signal", 0.0
+            )
+        if self._symbol_performance_enabled:
+            score += self._symbol_performance_weight * self._symbol_performance_score(symbol)
         return score
+
+    def _annotate_buy_candidates(self, candidates: list[dict[str, Any]]) -> None:
+        if not candidates:
+            return
+
+        momentum_values = []
+        for candidate in candidates:
+            metrics = self._compute_selection_metrics(
+                candidate.get("strategy_candles", [])
+            )
+            candidate["selection_metrics"] = metrics
+            if self._relative_strength_enabled:
+                momentum_values.append(metrics["vol_adjusted_momentum"])
+
+        if not self._relative_strength_enabled or not momentum_values:
+            return
+
+        mean = float(np.mean(momentum_values))
+        std = float(np.std(momentum_values))
+        for candidate in candidates:
+            momentum = candidate["selection_metrics"]["vol_adjusted_momentum"]
+            zscore = (momentum - mean) / std if std > 1e-10 else 0.0
+            candidate["selection_metrics"]["relative_strength_zscore"] = zscore
+
+    def _compute_selection_metrics(self, strategy_candles: list[OHLCV]) -> dict[str, float | bool]:
+        if not (
+            self._relative_strength_enabled or self._volume_weighted_momentum_enabled
+        ):
+            return {
+                "vol_adjusted_momentum": 0.0,
+                "current_volatility": 0.0,
+                "volatility_threshold": 0.0,
+                "passes_vol_filter": True,
+                "volume_ratio": 1.0,
+                "volume_weighted_momentum": 0.0,
+                "volume_weighted_momentum_signal": 0.0,
+                "relative_strength_zscore": 0.0,
+            }
+
+        closes = np.array([c.close for c in strategy_candles], dtype=np.float64)
+        volumes = np.array([max(c.volume, 0.0) for c in strategy_candles], dtype=np.float64)
+        required = max(
+            self._relative_strength_lookback_bars + 1,
+            self._relative_strength_vol_window + 1,
+            self._volume_momentum_long_window
+            if self._volume_weighted_momentum_enabled
+            else 0,
+        )
+        if len(closes) < required:
+            return {
+                "vol_adjusted_momentum": 0.0,
+                "current_volatility": 0.0,
+                "volatility_threshold": 0.0,
+                "passes_vol_filter": True,
+                "volume_ratio": 1.0,
+                "volume_weighted_momentum": 0.0,
+                "volume_weighted_momentum_signal": 0.0,
+                "relative_strength_zscore": 0.0,
+            }
+
+        log_returns = np.diff(np.log(np.clip(closes, 1e-12, None)))
+        momentum = float(np.sum(log_returns[-self._relative_strength_lookback_bars :]))
+        current_vol = float(np.std(log_returns[-self._relative_strength_vol_window :]))
+
+        rolling_vols = []
+        for idx in range(self._relative_strength_vol_window, len(log_returns) + 1):
+            window = log_returns[idx - self._relative_strength_vol_window : idx]
+            rolling_vols.append(float(np.std(window)))
+        vol_threshold = float(
+            np.quantile(rolling_vols, self._relative_strength_vol_percentile)
+        ) if rolling_vols else current_vol
+        passes_vol_filter = current_vol <= max(vol_threshold, 1e-12)
+        vol_adjusted_momentum = momentum / max(current_vol, 1e-6)
+
+        short_volume = float(np.mean(volumes[-self._volume_momentum_short_window :]))
+        long_volume = float(np.mean(volumes[-self._volume_momentum_long_window :]))
+        volume_ratio = short_volume / max(long_volume, 1e-6)
+        capped_volume_ratio = float(
+            np.clip(
+                volume_ratio,
+                1.0 / self._volume_ratio_cap,
+                self._volume_ratio_cap,
+            )
+        )
+        volume_weighted_momentum = vol_adjusted_momentum * capped_volume_ratio
+
+        return {
+            "vol_adjusted_momentum": float(vol_adjusted_momentum),
+            "current_volatility": current_vol,
+            "volatility_threshold": vol_threshold,
+            "passes_vol_filter": passes_vol_filter,
+            "volume_ratio": float(volume_ratio),
+            "volume_weighted_momentum": float(volume_weighted_momentum),
+            "volume_weighted_momentum_signal": float(
+                np.tanh(volume_weighted_momentum / 3.0)
+            ),
+            "relative_strength_zscore": 0.0,
+        }
+
+    def _apply_candidate_cohort_gate(
+        self, candidates: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        if not candidates or not self._candidate_cohort_gate_enabled:
+            return candidates
+
+        top_score = self._candidate_priority_score(candidates[0])
+        if top_score < self._no_trade_min_candidate_score:
+            self._cancel_candidate_batch(
+                candidates,
+                "top candidate composite score below no-trade floor",
+            )
+            return []
+
+        if len(candidates) > 1:
+            second_score = self._candidate_priority_score(candidates[1])
+            if (top_score - second_score) < self._no_trade_min_score_margin:
+                self._cancel_candidate_batch(
+                    candidates,
+                    "top candidate edge versus next alternative too small",
+                )
+                return []
+
+        return candidates
+
+    def _candidate_rank_weights(
+        self,
+        candidates: list[dict[str, Any]],
+    ) -> dict[str, float]:
+        if not candidates:
+            return {}
+
+        adjusted_scores: dict[str, float] = {}
+        for candidate in candidates:
+            score = max(self._candidate_priority_score(candidate), 1e-6)
+            adjusted_scores[candidate["symbol"]] = score ** max(
+                self._portfolio_rank_weight_power, 1e-6
+            )
+
+        total = sum(adjusted_scores.values())
+        if total <= 1e-12:
+            equal_weight = 1.0 / len(candidates)
+            return {candidate["symbol"]: equal_weight for candidate in candidates}
+        return {
+            symbol: score / total for symbol, score in adjusted_scores.items()
+        }
+
+    def _apply_portfolio_entry_targeting(
+        self,
+        candidate: dict[str, Any],
+        instruction,
+        remaining_candidates: list[dict[str, Any]],
+    ):
+        if (
+            not self._portfolio_targeting_enabled
+            or instruction.direction != Side.BUY
+            or instruction.quantity <= 0
+        ):
+            return instruction
+
+        current_price = candidate["current_price"]
+        if current_price <= 0:
+            return instruction
+
+        symbol = candidate["symbol"]
+        snapshot = self._tracker.snapshot()
+        current_total_exposure = self._tracker.get_total_exposure()
+        remaining_portfolio_ratio = max(
+            0.0, self._max_portfolio_exposure_ratio - current_total_exposure
+        )
+        current_symbol_exposure = self._tracker.get_exposure(symbol)
+        single_headroom_ratio = max(
+            0.0, self._max_single_exposure_ratio - current_symbol_exposure
+        )
+        if remaining_portfolio_ratio <= 0 or single_headroom_ratio <= 0:
+            instruction.quantity = 0.0
+            instruction.size_notional = 0.0
+            instruction.size_pct = 0.0
+            return instruction
+
+        rank_weights = self._candidate_rank_weights(remaining_candidates)
+        target_notional = snapshot.nav * remaining_portfolio_ratio * rank_weights.get(
+            symbol, 1.0
+        )
+        single_headroom_notional = snapshot.nav * single_headroom_ratio
+        boosted_baseline_notional = (
+            instruction.size_notional * self._portfolio_max_rank_size_multiplier
+        )
+        final_notional = min(
+            snapshot.cash * 0.99,
+            single_headroom_notional,
+            target_notional,
+            boosted_baseline_notional,
+        )
+        final_notional = max(0.0, final_notional)
+        final_quantity = final_notional / current_price if current_price > 0 else 0.0
+
+        if abs(final_quantity - instruction.quantity) > 1e-9:
+            logger.info(
+                "[%s] portfolio targeting adjusted buy size: qty %.6f -> %.6f, notional %.2f -> %.2f",
+                symbol,
+                instruction.quantity,
+                final_quantity,
+                instruction.size_notional,
+                final_notional,
+            )
+
+        instruction.quantity = final_quantity
+        instruction.size_notional = final_notional
+        instruction.size_pct = final_notional / snapshot.nav if snapshot.nav > 0 else 0.0
+        return instruction
+
+    def _symbol_performance_score(self, symbol: str) -> float:
+        if not self._symbol_performance_enabled:
+            return 0.0
+        strategy = self._strategies.get(symbol)
+        if strategy is None:
+            return 0.0
+        return float(strategy.symbol_performance_score())
+
+    def _dynamic_entry_penalty(self, symbol: str) -> float:
+        score = self._symbol_performance_score(symbol)
+        if symbol in self._satellite_symbols:
+            return (
+                self._satellite_underperformance_penalty
+                if score < self._satellite_underperformance_threshold
+                else 0.0
+            )
+        if symbol in self._core_symbols:
+            return (
+                self._core_underperformance_penalty
+                if score < self._core_underperformance_threshold
+                else 0.0
+            )
+        return 0.0
 
     def _cancel_buy_candidate(self, candidate: dict[str, Any], reason: str) -> None:
         symbol = candidate["symbol"]
-        strategy = candidate["strategy"]
-        current_price = candidate["current_price"]
-        intent = candidate["intent"]
         logger.info("[%s] skipped buy candidate: %s", symbol, reason)
+        strategy = candidate.get("strategy")
+        current_price = candidate.get("current_price")
+        intent = candidate.get("intent")
+        if strategy is None or current_price is None or intent is None:
+            return
         order = strategy.build_instruction(
             intent,
             current_price=current_price,
         ).to_order()
         strategy.on_cancel(order)
+
+    def _cancel_candidate_batch(
+        self, candidates: list[dict[str, Any]], reason: str
+    ) -> None:
+        for candidate in candidates:
+            self._cancel_buy_candidate(candidate, reason)
 
     def _active_symbol_count(self, exclude_symbols: Optional[Set[str]] = None) -> int:
         excluded = exclude_symbols or set()
@@ -685,6 +1072,9 @@ class StrategyMonitor:
             if pos.quantity > 0:
                 from core.models import OrderType, Side
 
+                if self._has_pending_side_order(pos.symbol, Side.SELL):
+                    self._mark_strategy_exit_pending(pos.symbol)
+                    continue
                 order = Order(
                     symbol=pos.symbol,
                     side=Side.SELL,
@@ -692,8 +1082,7 @@ class StrategyMonitor:
                     quantity=pos.quantity,
                 )
                 await self._order_manager.submit(order)
-                if pos.symbol in self._strategies:
-                    self._strategies[pos.symbol].force_flat()
+                self._mark_strategy_exit_pending(pos.symbol)
 
     def _on_order_event(self, order: Order) -> None:
         """Callback for order fill/cancel events."""
@@ -702,6 +1091,28 @@ class StrategyMonitor:
                 self._strategies[order.symbol].on_fill(order)
             elif order.status in (OrderStatus.CANCELLED, OrderStatus.REJECTED):
                 self._strategies[order.symbol].on_cancel(order)
+
+    def _has_pending_side_order(self, symbol: str, side: Side) -> bool:
+        pending_statuses = {
+            OrderStatus.PENDING,
+            OrderStatus.SUBMITTED,
+            OrderStatus.PARTIALLY_FILLED,
+        }
+        active_orders = getattr(self._order_manager, "active_orders", {})
+        if not isinstance(active_orders, dict):
+            return False
+        return any(
+            order.symbol == symbol
+            and order.side == side
+            and order.status in pending_statuses
+            for order in active_orders.values()
+        )
+
+    def _mark_strategy_exit_pending(self, symbol: str) -> None:
+        strategy = self._strategies.get(symbol)
+        if strategy is None:
+            return
+        strategy.mark_exit_pending()
 
     def _build_market_context(
         self, symbol_state: Dict[str, Dict[str, Any]]

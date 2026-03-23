@@ -127,6 +127,57 @@ class TestSubmit:
         ]
         assert fills[-1].filled_price == pytest.approx(102.0)
 
+    async def test_sell_fill_is_capped_to_available_inventory(self, tracker):
+        class _OversellExecutor:
+            def __init__(self):
+                self._order = None
+
+            async def execute(self, order):
+                self._order = order
+                order.status = OrderStatus.SUBMITTED
+                return order
+
+            async def get_status(self, order_id, symbol):
+                self._order.status = OrderStatus.FILLED
+                self._order.filled_quantity = 2.0
+                self._order.filled_price = 110.0
+                return self._order
+
+            async def cancel(self, order_id, symbol):
+                self._order.status = OrderStatus.CANCELLED
+                return self._order
+
+        tracker.on_fill(
+            Order(
+                symbol="BTC/USDT",
+                side=Side.BUY,
+                order_type=OrderType.MARKET,
+                quantity=1.0,
+                filled_quantity=1.0,
+                filled_price=100.0,
+            )
+        )
+
+        fills = []
+        executor = _OversellExecutor()
+        mgr = OrderManager(executor, tracker)
+        mgr.register_fill_callback(lambda order: fills.append(order))
+
+        order = Order(
+            symbol="BTC/USDT",
+            side=Side.SELL,
+            order_type=OrderType.MARKET,
+            quantity=2.0,
+        )
+        await mgr.submit(order)
+        await mgr.check_pending()
+
+        pos = tracker.get_position("BTC/USDT")
+        assert pos.quantity == pytest.approx(0.0)
+        assert tracker.snapshot().cash == pytest.approx(100009.79)
+        assert len(fills) == 1
+        assert fills[0].filled_quantity == pytest.approx(1.0)
+
 
 @pytest.mark.asyncio
 class TestCallbacks:

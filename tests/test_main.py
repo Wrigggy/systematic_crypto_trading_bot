@@ -109,6 +109,8 @@ class TestStrategyProfiles:
         assert config["strategy"]["top_n_entries_per_cycle"] == 1
         assert config["strategy"]["satellite_max_active_positions"] == 1
         assert config["strategy"]["satellite_min_entry_score_bonus"] == pytest.approx(0.04)
+        assert config["strategy"]["volume_weighted_momentum_enabled"] is False
+        assert config["strategy"]["candidate_cohort_gate_enabled"] is False
         assert config["strategy"]["core_symbols"] == [
             "BTC/USDT",
             "ETH/USDT",
@@ -148,6 +150,81 @@ class TestStrategyProfiles:
         assert config["strategy"]["enable_pullback_reentry"] is True
         assert config["strategy"]["enable_overextension_exit"] is True
         assert config["risk"]["max_portfolio_exposure"] == pytest.approx(0.05)
+
+    def test_apply_stable_swing_t_profile_restricts_universe_and_frequency(self):
+        config = {
+            "alpha": {"engine": "ensemble", "resample_minutes": 1},
+            "strategy": {"use_model_overlay": True},
+            "symbols": ["DOGE/USDT"],
+        }
+
+        _apply_strategy_profile(config, "stable_swing_t_v1")
+
+        assert config["strategy"]["profile"] == "stable_swing_t_v1"
+        assert config["alpha"]["engine"] == "rule_based"
+        assert config["symbols"] == ["BTC/USDT", "SOL/USDT"]
+        assert config["strategy"]["post_exit_cooldown_minutes"] == 120
+        assert config["strategy"]["max_active_positions"] == 1
+        assert config["strategy"]["relative_strength_enabled"] is False
+        assert config["risk"]["max_portfolio_exposure"] == pytest.approx(0.04)
+
+    def test_apply_stable_swing_t_v2_profile_is_btc_only_and_more_selective(self):
+        config = {
+            "alpha": {"engine": "ensemble", "resample_minutes": 1},
+            "strategy": {"use_model_overlay": True},
+            "symbols": ["DOGE/USDT", "SOL/USDT"],
+        }
+
+        _apply_strategy_profile(config, "stable_swing_t_v2")
+
+        assert config["strategy"]["profile"] == "stable_swing_t_v2"
+        assert config["alpha"]["engine"] == "rule_based"
+        assert config["symbols"] == ["BTC/USDT", "ETH/USDT"]
+        assert config["strategy"]["confirmation_bars"] == 3
+        assert config["strategy"]["post_exit_cooldown_minutes"] == 150
+        assert config["strategy"]["min_entry_score"] == pytest.approx(0.72)
+        assert config["strategy"]["max_active_positions"] == 1
+        assert config["risk"]["max_portfolio_exposure"] == pytest.approx(0.035)
+
+    def test_apply_stable_swing_t_v2_guarded_profile_treats_eth_as_satellite(self):
+        config = {
+            "alpha": {"engine": "ensemble", "resample_minutes": 1},
+            "strategy": {"use_model_overlay": True},
+            "symbols": ["DOGE/USDT", "SOL/USDT"],
+        }
+
+        _apply_strategy_profile(config, "stable_swing_t_v2_guarded")
+
+        assert config["strategy"]["profile"] == "stable_swing_t_v2_guarded"
+        assert config["alpha"]["engine"] == "rule_based"
+        assert config["symbols"] == ["BTC/USDT", "ETH/USDT"]
+        assert config["strategy"]["confirmation_bars"] == 3
+        assert config["strategy"]["post_exit_cooldown_minutes"] == 150
+        assert config["strategy"]["core_symbols"] == ["BTC/USDT"]
+        assert config["strategy"]["satellite_symbols"] == ["ETH/USDT"]
+        assert config["strategy"]["relative_strength_enabled"] is True
+        assert config["strategy"]["symbol_performance_enabled"] is True
+        assert config["strategy"]["satellite_min_entry_score_bonus"] == pytest.approx(0.05)
+        assert config["risk"]["break_even_trigger_pct"] == pytest.approx(0.010)
+
+    def test_apply_stable_swing_t_v3_lstm_profile_uses_eth_as_satellite(self):
+        config = {
+            "alpha": {"engine": "rule_based", "resample_minutes": 1},
+            "strategy": {"use_model_overlay": False},
+            "symbols": ["DOGE/USDT"],
+        }
+
+        _apply_strategy_profile(config, "stable_swing_t_v3_lstm")
+
+        assert config["strategy"]["profile"] == "stable_swing_t_v3_lstm"
+        assert config["alpha"]["engine"] == "ensemble"
+        assert config["strategy"]["use_model_overlay"] is True
+        assert config["symbols"] == ["BTC/USDT", "ETH/USDT"]
+        assert config["strategy"]["core_symbols"] == ["BTC/USDT"]
+        assert config["strategy"]["satellite_symbols"] == ["ETH/USDT"]
+        assert config["strategy"]["enable_grid_reversion_entry"] is True
+        assert config["strategy"]["enable_volatility_compression_entry"] is True
+        assert config["strategy"]["satellite_min_entry_score_bonus"] == pytest.approx(0.07)
 
 
 class TestRoostooStartingCapital:

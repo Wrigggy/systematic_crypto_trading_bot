@@ -461,3 +461,21 @@ class TestDayBoundaryReset:
             await monitor._process_iteration(1)
             mock_reset_shield.assert_called_once()
             mock_reset_tracker.assert_called_once()
+
+
+class TestExitPendingState:
+    def test_exit_pending_position_blocks_duplicate_stop_orders(self, default_config):
+        shield = RiskShield(default_config)
+        tracker = PortfolioTracker(100_000.0, fee_bps=10.0)
+        tracker.on_fill(make_filled_buy(price=100.0, qty=1.0))
+        pos = tracker.get_position("BTC/USDT")
+        pos.peak_price = 110.0
+        pos.state = StrategyState.HOLDING
+
+        tracker.mark_exit_pending("BTC/USDT")
+        orders = shield.check_stops(tracker, {"BTC/USDT": make_candle_series(1, start_price=106.0)[0]}, {})
+        assert orders == []
+
+        tracker.restore_holding_if_position("BTC/USDT")
+        orders = shield.check_stops(tracker, {"BTC/USDT": make_candle_series(1, start_price=106.0)[0]}, {})
+        assert len(orders) == 1

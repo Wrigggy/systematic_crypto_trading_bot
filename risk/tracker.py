@@ -177,6 +177,26 @@ class PortfolioTracker:
         self._daily_peak_nav = self._daily_start_nav
         logger.info("Daily reset: NAV=%.2f", self._daily_start_nav)
 
+    def mark_exit_pending(self, symbol: str) -> None:
+        """Mark an existing long as being in the process of exiting."""
+        pos = self._positions.get(symbol)
+        if pos is None or pos.quantity <= 0:
+            return
+        if pos.state != StrategyState.EXIT_PENDING:
+            pos.state = StrategyState.EXIT_PENDING
+            logger.info("Marked %s as EXIT_PENDING", symbol)
+
+    def restore_holding_if_position(self, symbol: str) -> None:
+        """Restore HOLDING state after a cancelled exit if inventory remains."""
+        pos = self._positions.get(symbol)
+        if pos is None:
+            return
+        if pos.quantity > 1e-10:
+            pos.state = StrategyState.HOLDING
+            logger.info("Restored %s to HOLDING", symbol)
+        else:
+            pos.state = StrategyState.FLAT
+
     def restore_position(self, symbol: str, quantity: float, entry_price: float) -> None:
         """Restore position from exchange state (restart recovery). Does not modify cash."""
         pos = self._get_or_create_position(symbol)

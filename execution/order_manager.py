@@ -4,7 +4,7 @@ import logging
 from datetime import datetime
 from typing import Callable, Dict, List
 
-from core.models import Order, OrderStatus
+from core.models import Order, OrderStatus, Side
 from execution.executor import BaseExecutor
 from risk.tracker import PortfolioTracker
 
@@ -41,6 +41,8 @@ class OrderManager:
         order = await self._executor.execute(order)
 
         if order.status in (OrderStatus.FILLED, OrderStatus.PARTIALLY_FILLED):
+            if order.side == Side.SELL:
+                self._tracker.mark_exit_pending(order.symbol)
             reported_qty = order.filled_quantity
             reported_price = order.filled_price
             order.filled_quantity = 0.0
@@ -54,6 +56,8 @@ class OrderManager:
             if order.status == OrderStatus.PARTIALLY_FILLED:
                 self._active_orders[order.order_id] = order
         elif order.status in (OrderStatus.SUBMITTED, OrderStatus.PENDING):
+            if order.side == Side.SELL:
+                self._tracker.mark_exit_pending(order.symbol)
             self._active_orders[order.order_id] = order
         else:
             logger.warning("Order %s status: %s", order.order_id, order.status.value)
@@ -72,6 +76,8 @@ class OrderManager:
         cancelled.quantity = order.quantity
         cancelled.filled_quantity = order.filled_quantity
         cancelled.filled_price = order.filled_price
+        if order.side == Side.SELL:
+            self._tracker.restore_holding_if_position(order.symbol)
         logger.info("Cancelled order %s", order_id)
 
         # Notify callbacks of cancellation
@@ -117,6 +123,8 @@ class OrderManager:
                         to_remove.append(order_id)
                 elif updated.status == OrderStatus.CANCELLED:
                     order.status = OrderStatus.CANCELLED
+                    if order.side == Side.SELL:
+                        self._tracker.restore_holding_if_position(order.symbol)
                     self._notify_callbacks(order)
                     to_remove.append(order_id)
                 self._error_counts.pop(order_id, None)
@@ -130,6 +138,8 @@ class OrderManager:
                         self._max_errors,
                     )
                     order.status = OrderStatus.CANCELLED
+                    if order.side == Side.SELL:
+                        self._tracker.restore_holding_if_position(order.symbol)
                     to_remove.append(order_id)
                     self._notify_callbacks(order)
 
@@ -190,11 +200,29 @@ class OrderManager:
         )
         new_qty = max(0.0, cumulative_filled_qty or 0.0)
         delta_qty = max(0.0, new_qty - prev_qty)
+        effective_new_qty = new_qty
 
         order.status = status
-        order.filled_quantity = new_qty
         if cumulative_avg_price is not None:
             order.filled_price = cumulative_avg_price
+
+        if delta_qty <= 1e-12:
+            order.filled_quantity = prev_qty
+            return
+
+        if order.side == Side.SELL:
+            available_qty = max(0.0, self._tracker.get_position(order.symbol).quantity)
+            if delta_qty > available_qty + 1e-12:
+                logger.warning(
+                    "Capping sell fill for %s from %.6f to %.6f to avoid overselling tracked inventory",
+                    order.symbol,
+                    delta_qty,
+                    available_qty,
+                )
+                delta_qty = available_qty
+                effective_new_qty = prev_qty + delta_qty
+
+        order.filled_quantity = effective_new_qty
 
         if delta_qty <= 1e-12:
             return

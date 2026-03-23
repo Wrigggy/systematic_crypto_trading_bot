@@ -17,7 +17,7 @@ from core.models import (
     StrategyState,
 )
 from strategy.logic import StrategyLogic
-from tests.conftest import make_filled_buy, make_signal
+from tests.conftest import make_filled_buy, make_filled_sell, make_signal
 
 
 @pytest.fixture
@@ -199,6 +199,73 @@ class TestForceFlat:
         logic.force_flat()
         assert logic.state == StrategyState.FLAT
 
+    def test_mark_exit_pending_from_holding(self, logic, snap_100k):
+        logic.on_signal(make_signal(alpha=0.8), snap_100k, current_price=100.0)
+        logic.on_fill(make_filled_buy(price=100.0, qty=10.0))
+        logic.mark_exit_pending()
+        assert logic.state == StrategyState.EXIT_PENDING
+
+
+class TestSymbolPerformanceMemory:
+    def test_closed_trade_is_recorded_for_symbol_performance(self, logic, snap_100k, portfolio_with_position):
+        ts = datetime(2025, 1, 1)
+        bullish = _factor_snapshot(
+            ts=ts,
+            observations=[
+                _bullish_observation("trend_alignment", "trend", ts=ts),
+                _bullish_observation("market_regime", "regime", ts=ts),
+            ],
+            supporting_factors=["trend_alignment", "market_regime"],
+        )
+        exit_snapshot = _factor_snapshot(
+            ts=ts + timedelta(minutes=15),
+            entry_score=0.0,
+            exit_score=0.9,
+            blocker_score=0.6,
+            observations=[_bearish_observation("volatility_regime", "risk", ts=ts + timedelta(minutes=15))],
+            blocking_factors=["volatility_regime"],
+        )
+
+        logic.on_factors(bullish, snap_100k, current_price=100.0)
+        logic.on_fill(make_filled_buy(price=100.0, qty=1.0))
+        intent = logic.on_factors(exit_snapshot, portfolio_with_position, current_price=110.0)
+        assert intent is not None
+
+        logic.on_fill(make_filled_sell(price=110.0, qty=1.0))
+        assert logic.recent_trade_count == 1
+        assert logic.symbol_performance_score() == 0.0  # below min trades window
+
+    def test_symbol_performance_score_turns_negative_after_losses(self, default_config, snap_100k, portfolio_with_position):
+        config = copy.deepcopy(default_config)
+        config["strategy"]["symbol_performance_min_trades"] = 3
+        logic = StrategyLogic("BTC/USDT", config)
+        ts = datetime(2025, 1, 1)
+        bullish = _factor_snapshot(
+            ts=ts,
+            observations=[
+                _bullish_observation("trend_alignment", "trend", ts=ts),
+                _bullish_observation("market_regime", "regime", ts=ts),
+            ],
+            supporting_factors=["trend_alignment", "market_regime"],
+        )
+        exit_snapshot = _factor_snapshot(
+            ts=ts + timedelta(minutes=15),
+            entry_score=0.0,
+            exit_score=0.9,
+            blocker_score=0.6,
+            observations=[_bearish_observation("volatility_regime", "risk", ts=ts + timedelta(minutes=15))],
+            blocking_factors=["volatility_regime"],
+        )
+
+        for sell_price in (99.0, 98.0, 97.0):
+            logic.on_factors(bullish, snap_100k, current_price=100.0)
+            logic.on_fill(make_filled_buy(price=100.0, qty=1.0))
+            logic.on_factors(exit_snapshot, portfolio_with_position, current_price=sell_price)
+            logic.on_fill(make_filled_sell(price=sell_price, qty=1.0))
+
+        assert logic.recent_trade_count == 3
+        assert logic.symbol_performance_score() < 0.0
+
     def test_force_flat_from_pending(self, logic, snap_100k):
         logic.on_signal(make_signal(alpha=0.8), snap_100k, current_price=100.0)
         logic.force_flat()
@@ -309,6 +376,95 @@ class TestFactorFirstStateMachine:
         intent = logic.on_factors(snapshot, snap_100k, current_price=100.0)
         assert intent is not None
         assert intent.quantity == pytest.approx(risk_on_intent.quantity * 0.5)
+
+    def test_post_exit_cooldown_blocks_immediate_reentry(self, default_config, snap_100k, portfolio_with_position):
+        config = copy.deepcopy(default_config)
+        config["strategy"].update(
+            {
+                "confirmation_bars": 1,
+                "post_exit_cooldown_minutes": 180,
+            }
+        )
+        logic = StrategyLogic("BTC/USDT", config)
+        ts = datetime(2025, 1, 1, 0, 0)
+        bullish = _factor_snapshot(
+            ts=ts,
+            observations=[
+                _bullish_observation("trend_alignment", "price_structure", ts=ts),
+                _bullish_observation("volume_confirmation", "flow", ts=ts),
+            ],
+            supporting_factors=["trend_alignment", "volume_confirmation"],
+        )
+        exit_snapshot = _factor_snapshot(
+            ts=ts + timedelta(minutes=15),
+            entry_score=0.0,
+            exit_score=0.9,
+            blocker_score=0.6,
+            observations=[
+                _bearish_observation(
+                    "overextension_exit", "risk", ts=ts + timedelta(minutes=15)
+                )
+            ],
+            blocking_factors=["overextension_exit"],
+        )
+
+        intent = logic.on_factors(bullish, snap_100k, current_price=100.0)
+        assert intent is not None
+        entry_fill = make_filled_buy(price=100.0, qty=1.0)
+        entry_fill.filled_at = ts
+        logic.on_fill(entry_fill)
+
+        exit_intent = logic.on_factors(
+            exit_snapshot, portfolio_with_position, current_price=101.0
+        )
+        assert exit_intent is not None
+        exit_fill = make_filled_sell(price=101.0, qty=1.0)
+        exit_fill.filled_at = ts + timedelta(minutes=15)
+        logic.on_fill(exit_fill)
+
+        blocked = logic.on_factors(
+            _factor_snapshot(
+                ts=ts + timedelta(minutes=60),
+                observations=[
+                    _bullish_observation(
+                        "trend_alignment",
+                        "price_structure",
+                        ts=ts + timedelta(minutes=60),
+                    ),
+                    _bullish_observation(
+                        "volume_confirmation",
+                        "flow",
+                        ts=ts + timedelta(minutes=60),
+                    ),
+                ],
+                supporting_factors=["trend_alignment", "volume_confirmation"],
+            ),
+            snap_100k,
+            current_price=102.0,
+        )
+        assert blocked is None
+
+        allowed = logic.on_factors(
+            _factor_snapshot(
+                ts=ts + timedelta(minutes=210),
+                observations=[
+                    _bullish_observation(
+                        "trend_alignment",
+                        "price_structure",
+                        ts=ts + timedelta(minutes=210),
+                    ),
+                    _bullish_observation(
+                        "volume_confirmation",
+                        "flow",
+                        ts=ts + timedelta(minutes=210),
+                    ),
+                ],
+                supporting_factors=["trend_alignment", "volume_confirmation"],
+            ),
+            snap_100k,
+            current_price=102.0,
+        )
+        assert allowed is not None
 
     def test_failed_breadth_does_not_count_toward_confirmation(
         self, default_config, snap_100k

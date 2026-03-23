@@ -244,3 +244,81 @@ class TestFactorEngine:
         )
         assert overextension.bias == FactorBias.BEARISH
         assert overextension.strength > 0.0
+
+    def test_volatility_compression_entry_turns_bullish_for_quiet_trend(self):
+        engine = FactorEngine(
+            {
+                "strategy": {
+                    "enable_volatility_compression_entry": True,
+                    "vol_compression_min_breakout_distance": -0.05,
+                    "vol_compression_max_breakout_distance": 0.20,
+                    "vol_compression_min_rsi": 50.0,
+                    "vol_compression_max_rsi": 64.0,
+                    "vol_compression_short_vol_ratio_max": 0.85,
+                    "vol_compression_min_volume_ratio": 0.80,
+                    "vol_compression_max_volume_ratio": 1.15,
+                    "factor_weights": {"volatility_compression_entry": 0.18},
+                },
+                "trend": {"min_trend_slope": 0.0006},
+            }
+        )
+        snapshot = engine.evaluate(
+            _feature_vector(
+                rsi=57.0,
+                volatility=0.010,
+                volume_ratio=0.96,
+                raw={
+                    "breakout_distance": 0.08,
+                    "trend_slope": 0.0010,
+                    "volume_zscore": -0.10,
+                    "realized_vol_short": 0.0065,
+                },
+            )
+        )
+        obs = next(
+            item
+            for item in snapshot.observations
+            if item.name == "volatility_compression_entry"
+        )
+        assert obs.bias == FactorBias.BULLISH
+        assert obs.strength > 0.0
+
+    def test_grid_reversion_entry_turns_bullish_for_shallow_dip(self):
+        engine = FactorEngine(
+            {
+                "strategy": {
+                    "enable_grid_reversion_entry": True,
+                    "grid_reversion_min_breakout_distance": -0.25,
+                    "grid_reversion_max_breakout_distance": 0.04,
+                    "grid_reversion_target_breakout_distance": -0.08,
+                    "grid_reversion_min_rsi": 45.0,
+                    "grid_reversion_max_rsi": 56.0,
+                    "grid_reversion_target_rsi": 50.0,
+                    "grid_reversion_min_momentum": -0.006,
+                    "grid_reversion_max_momentum": 0.004,
+                    "grid_reversion_min_volume_ratio": 0.80,
+                    "grid_reversion_max_volume_ratio": 1.20,
+                    "grid_reversion_short_vol_ratio_max": 1.05,
+                    "factor_weights": {"grid_reversion_entry": 0.14},
+                },
+                "trend": {"min_trend_slope": 0.0006},
+            }
+        )
+        snapshot = engine.evaluate(
+            _feature_vector(
+                rsi=50.0,
+                momentum=-0.0015,
+                volume_ratio=0.92,
+                raw={
+                    "breakout_distance": -0.09,
+                    "trend_slope": 0.0010,
+                    "volume_zscore": 0.05,
+                    "realized_vol_short": 0.0090,
+                },
+            )
+        )
+        obs = next(
+            item for item in snapshot.observations if item.name == "grid_reversion_entry"
+        )
+        assert obs.bias == FactorBias.BULLISH
+        assert obs.strength > 0.0

@@ -28,6 +28,8 @@ class FactorEngine:
             "momentum_impulse": 0.22,
             "breakout_confirmation": 0.12,
             "pullback_reentry": 0.0,
+            "volatility_compression_entry": 0.0,
+            "grid_reversion_entry": 0.0,
             "overextension_exit": 0.0,
             "volume_confirmation": 0.15,
             "liquidity_balance": 0.10,
@@ -88,6 +90,72 @@ class FactorEngine:
         self._pullback_trend_slack: float = strategy_cfg.get(
             "pullback_trend_slack", 0.70
         )
+        self._enable_volatility_compression_entry: bool = strategy_cfg.get(
+            "enable_volatility_compression_entry", False
+        )
+        self._vol_compression_min_breakout_distance: float = strategy_cfg.get(
+            "vol_compression_min_breakout_distance", -0.05
+        )
+        self._vol_compression_max_breakout_distance: float = strategy_cfg.get(
+            "vol_compression_max_breakout_distance", 0.25
+        )
+        self._vol_compression_min_rsi: float = strategy_cfg.get(
+            "vol_compression_min_rsi", 48.0
+        )
+        self._vol_compression_max_rsi: float = strategy_cfg.get(
+            "vol_compression_max_rsi", 64.0
+        )
+        self._vol_compression_short_vol_ratio_max: float = strategy_cfg.get(
+            "vol_compression_short_vol_ratio_max", 0.90
+        )
+        self._vol_compression_min_volume_ratio: float = strategy_cfg.get(
+            "vol_compression_min_volume_ratio", 0.75
+        )
+        self._vol_compression_max_volume_ratio: float = strategy_cfg.get(
+            "vol_compression_max_volume_ratio", 1.20
+        )
+        self._vol_compression_trend_slack: float = strategy_cfg.get(
+            "vol_compression_trend_slack", 0.85
+        )
+        self._enable_grid_reversion_entry: bool = strategy_cfg.get(
+            "enable_grid_reversion_entry", False
+        )
+        self._grid_reversion_min_breakout_distance: float = strategy_cfg.get(
+            "grid_reversion_min_breakout_distance", -0.25
+        )
+        self._grid_reversion_max_breakout_distance: float = strategy_cfg.get(
+            "grid_reversion_max_breakout_distance", 0.04
+        )
+        self._grid_reversion_target_breakout_distance: float = strategy_cfg.get(
+            "grid_reversion_target_breakout_distance", -0.08
+        )
+        self._grid_reversion_min_rsi: float = strategy_cfg.get(
+            "grid_reversion_min_rsi", 45.0
+        )
+        self._grid_reversion_max_rsi: float = strategy_cfg.get(
+            "grid_reversion_max_rsi", 56.0
+        )
+        self._grid_reversion_target_rsi: float = strategy_cfg.get(
+            "grid_reversion_target_rsi", 50.0
+        )
+        self._grid_reversion_min_momentum: float = strategy_cfg.get(
+            "grid_reversion_min_momentum", -0.006
+        )
+        self._grid_reversion_max_momentum: float = strategy_cfg.get(
+            "grid_reversion_max_momentum", 0.004
+        )
+        self._grid_reversion_min_volume_ratio: float = strategy_cfg.get(
+            "grid_reversion_min_volume_ratio", 0.80
+        )
+        self._grid_reversion_max_volume_ratio: float = strategy_cfg.get(
+            "grid_reversion_max_volume_ratio", 1.35
+        )
+        self._grid_reversion_short_vol_ratio_max: float = strategy_cfg.get(
+            "grid_reversion_short_vol_ratio_max", 1.10
+        )
+        self._grid_reversion_trend_slack: float = strategy_cfg.get(
+            "grid_reversion_trend_slack", 0.80
+        )
         self._enable_overextension_exit: bool = strategy_cfg.get(
             "enable_overextension_exit", False
         )
@@ -121,6 +189,8 @@ class FactorEngine:
             self._momentum_impulse(features),
             self._breakout_confirmation(features),
             self._pullback_reentry(features),
+            self._volatility_compression_entry(features),
+            self._grid_reversion_entry(features),
             self._overextension_exit(features, supp),
             self._volume_confirmation(features),
             self._liquidity_balance(features, supp),
@@ -424,6 +494,256 @@ class FactorEngine:
                 "trend_slope": trend_slope,
                 "ema_spread": ema_spread,
                 "volume_ratio": features.volume_ratio,
+            },
+        )
+
+    def _volatility_compression_entry(self, features: FeatureVector) -> FactorObservation:
+        breakout_distance = float(features.raw.get("breakout_distance", 0.0))
+        trend_slope = float(features.raw.get("trend_slope", 0.0))
+        realized_vol_short = float(
+            features.raw.get("realized_vol_short", features.volatility)
+        )
+        ema_spread = (
+            (features.ema_fast - features.ema_slow) / features.ema_slow
+            if features.ema_slow > 0
+            else 0.0
+        )
+
+        if not self._enable_volatility_compression_entry:
+            return FactorObservation(
+                symbol=features.symbol,
+                name="volatility_compression_entry",
+                category="volatility",
+                timestamp=features.timestamp,
+                bias=FactorBias.NEUTRAL,
+                strength=0.0,
+                value=realized_vol_short,
+                threshold=self._vol_compression_short_vol_ratio_max,
+                horizon_minutes=180,
+                expected_move_bps=0.0,
+                thesis="Volatility compression entry disabled",
+                invalidate_condition="Volatility compression entry becomes enabled",
+                metadata={},
+            )
+
+        short_vol_ratio = realized_vol_short / max(features.volatility, 1e-6)
+        trend_floor = self._min_trend_slope * self._vol_compression_trend_slack
+        bias = FactorBias.NEUTRAL
+        strength = 0.0
+
+        if (
+            ema_spread > 0
+            and trend_slope >= trend_floor
+            and self._vol_compression_min_breakout_distance
+            <= breakout_distance
+            <= self._vol_compression_max_breakout_distance
+            and self._vol_compression_min_rsi <= features.rsi <= self._vol_compression_max_rsi
+            and short_vol_ratio <= self._vol_compression_short_vol_ratio_max
+            and self._vol_compression_min_volume_ratio
+            <= features.volume_ratio
+            <= self._vol_compression_max_volume_ratio
+        ):
+            compression_score = _clamp(
+                (
+                    self._vol_compression_short_vol_ratio_max - short_vol_ratio
+                )
+                / max(self._vol_compression_short_vol_ratio_max, 1e-6)
+            )
+            distance_score = 1.0 - min(
+                abs(
+                    breakout_distance
+                    - (
+                        self._vol_compression_min_breakout_distance
+                        + self._vol_compression_max_breakout_distance
+                    )
+                    / 2.0
+                )
+                / max(
+                    (
+                        self._vol_compression_max_breakout_distance
+                        - self._vol_compression_min_breakout_distance
+                    )
+                    * 0.5,
+                    1e-6,
+                ),
+                1.0,
+            )
+            trend_score = _clamp(
+                (trend_slope - trend_floor) / max(abs(trend_floor) * 3.0, 1e-6)
+            )
+            volume_mid = (
+                self._vol_compression_min_volume_ratio
+                + self._vol_compression_max_volume_ratio
+            ) / 2.0
+            volume_score = 1.0 - min(
+                abs(features.volume_ratio - volume_mid)
+                / max(
+                    (
+                        self._vol_compression_max_volume_ratio
+                        - self._vol_compression_min_volume_ratio
+                    )
+                    * 0.5,
+                    1e-6,
+                ),
+                1.0,
+            )
+            strength = _clamp(
+                0.35 * compression_score
+                + 0.25 * distance_score
+                + 0.25 * trend_score
+                + 0.15 * volume_score
+            )
+            bias = FactorBias.BULLISH
+
+        return FactorObservation(
+            symbol=features.symbol,
+            name="volatility_compression_entry",
+            category="volatility",
+            timestamp=features.timestamp,
+            bias=bias,
+            strength=strength if bias == FactorBias.BULLISH else 0.0,
+            value=short_vol_ratio,
+            threshold=self._vol_compression_short_vol_ratio_max,
+            horizon_minutes=180,
+            expected_move_bps=35.0 + 95.0 * strength,
+            thesis=(
+                f"Short vol ratio {short_vol_ratio:.2f} with breakout {breakout_distance:.2f} ATR, "
+                f"RSI {features.rsi:.1f}, slope {trend_slope:.4f}"
+            ),
+            invalidate_condition="Trend weakens or short-term volatility expands back above the compression threshold",
+            metadata={
+                "breakout_distance": breakout_distance,
+                "trend_slope": trend_slope,
+                "realized_vol_short": realized_vol_short,
+                "volatility": features.volatility,
+                "short_vol_ratio": short_vol_ratio,
+                "volume_ratio": features.volume_ratio,
+                "rsi": features.rsi,
+            },
+        )
+
+    def _grid_reversion_entry(self, features: FeatureVector) -> FactorObservation:
+        breakout_distance = float(features.raw.get("breakout_distance", 0.0))
+        trend_slope = float(features.raw.get("trend_slope", 0.0))
+        realized_vol_short = float(
+            features.raw.get("realized_vol_short", features.volatility)
+        )
+        ema_spread = (
+            (features.ema_fast - features.ema_slow) / features.ema_slow
+            if features.ema_slow > 0
+            else 0.0
+        )
+        short_vol_ratio = realized_vol_short / max(features.volatility, 1e-6)
+
+        if not self._enable_grid_reversion_entry:
+            return FactorObservation(
+                symbol=features.symbol,
+                name="grid_reversion_entry",
+                category="entry_timing",
+                timestamp=features.timestamp,
+                bias=FactorBias.NEUTRAL,
+                strength=0.0,
+                value=breakout_distance,
+                threshold=self._grid_reversion_max_breakout_distance,
+                horizon_minutes=90,
+                expected_move_bps=0.0,
+                thesis="Grid reversion entry disabled",
+                invalidate_condition="Grid reversion entry becomes enabled",
+                metadata={},
+            )
+
+        trend_floor = self._min_trend_slope * self._grid_reversion_trend_slack
+        bias = FactorBias.NEUTRAL
+        strength = 0.0
+
+        if (
+            ema_spread > 0
+            and trend_slope >= trend_floor
+            and self._grid_reversion_min_breakout_distance
+            <= breakout_distance
+            <= self._grid_reversion_max_breakout_distance
+            and self._grid_reversion_min_rsi <= features.rsi <= self._grid_reversion_max_rsi
+            and self._grid_reversion_min_momentum
+            <= features.momentum
+            <= self._grid_reversion_max_momentum
+            and self._grid_reversion_min_volume_ratio
+            <= features.volume_ratio
+            <= self._grid_reversion_max_volume_ratio
+            and short_vol_ratio <= self._grid_reversion_short_vol_ratio_max
+        ):
+            distance_width = max(
+                self._grid_reversion_max_breakout_distance
+                - self._grid_reversion_min_breakout_distance,
+                1e-6,
+            )
+            rsi_width = max(
+                self._grid_reversion_max_rsi - self._grid_reversion_min_rsi, 1e-6
+            )
+            momentum_width = max(
+                self._grid_reversion_max_momentum - self._grid_reversion_min_momentum,
+                1e-6,
+            )
+            distance_score = 1.0 - min(
+                abs(breakout_distance - self._grid_reversion_target_breakout_distance)
+                / max(distance_width * 0.5, 1e-6),
+                1.0,
+            )
+            rsi_score = 1.0 - min(
+                abs(features.rsi - self._grid_reversion_target_rsi)
+                / max(rsi_width * 0.5, 1e-6),
+                1.0,
+            )
+            momentum_mid = (
+                self._grid_reversion_min_momentum + self._grid_reversion_max_momentum
+            ) / 2.0
+            momentum_score = 1.0 - min(
+                abs(features.momentum - momentum_mid)
+                / max(momentum_width * 0.5, 1e-6),
+                1.0,
+            )
+            vol_score = _clamp(
+                (
+                    self._grid_reversion_short_vol_ratio_max - short_vol_ratio
+                )
+                / max(self._grid_reversion_short_vol_ratio_max, 1e-6)
+            )
+            trend_score = _clamp(
+                (trend_slope - trend_floor) / max(abs(trend_floor) * 3.0, 1e-6)
+            )
+            strength = _clamp(
+                0.28 * distance_score
+                + 0.22 * rsi_score
+                + 0.16 * momentum_score
+                + 0.16 * vol_score
+                + 0.18 * trend_score
+            )
+            bias = FactorBias.BULLISH
+
+        return FactorObservation(
+            symbol=features.symbol,
+            name="grid_reversion_entry",
+            category="entry_timing",
+            timestamp=features.timestamp,
+            bias=bias,
+            strength=strength if bias == FactorBias.BULLISH else 0.0,
+            value=breakout_distance,
+            threshold=self._grid_reversion_max_breakout_distance,
+            horizon_minutes=90,
+            expected_move_bps=25.0 + 85.0 * strength,
+            thesis=(
+                f"Grid-style reversion at {breakout_distance:.2f} ATR with RSI {features.rsi:.1f}, "
+                f"momentum {features.momentum:.4f}, short vol ratio {short_vol_ratio:.2f}"
+            ),
+            invalidate_condition="Pullback turns into breakdown or short-term volatility expands sharply",
+            metadata={
+                "breakout_distance": breakout_distance,
+                "trend_slope": trend_slope,
+                "rsi": features.rsi,
+                "momentum": features.momentum,
+                "volume_ratio": features.volume_ratio,
+                "realized_vol_short": realized_vol_short,
+                "volatility": features.volatility,
+                "short_vol_ratio": short_vol_ratio,
             },
         )
 

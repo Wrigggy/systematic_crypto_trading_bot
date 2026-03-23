@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 import pytest
 
-from core.models import FactorSnapshot, FeatureVector, OHLCV, Order, OrderType, Side, StrategyState
+from core.models import FactorSnapshot, FeatureVector, OHLCV, Order, OrderStatus, OrderType, Side, StrategyState
 from data.buffer import LiveBuffer
 from features.extractor import FeatureExtractor
 from data.resampler import MultiResampler
@@ -266,6 +266,38 @@ class TestMonitorStatusFormatting:
         )
         assert status == "Regime=risk_off(score=-0.214, breadth=0.23)"
 
+    def test_detects_pending_sell_order_for_symbol(self, default_config):
+        class _OrderManagerStub:
+            def __init__(self):
+                self.active_orders = {
+                    "exit-1": Order(
+                        symbol="BTC/USDT",
+                        side=Side.SELL,
+                        order_type=OrderType.MARKET,
+                        quantity=1.0,
+                        status=OrderStatus.SUBMITTED,
+                    )
+                }
+
+            def register_fill_callback(self, cb):
+                self._callback = cb
+
+        class _AlphaStub:
+            _seq_len = 1
+
+        monitor = StrategyMonitor(
+            config=default_config,
+            buffer=LiveBuffer(max_candles=10),
+            extractor=FeatureExtractor(default_config["features"]),
+            alpha_engine=_AlphaStub(),
+            risk_shield=RiskShield(default_config),
+            tracker=PortfolioTracker(100_000.0),
+            order_manager=_OrderManagerStub(),
+        )
+
+        assert monitor._has_pending_side_order("BTC/USDT", Side.SELL) is True
+        assert monitor._has_pending_side_order("BTC/USDT", Side.BUY) is False
+
 
 class TestMarketContext:
     def test_breadth_floor_caps_risk_on_regime(self, default_config):
@@ -414,7 +446,33 @@ class TestMonitorCandidateSelection:
                 blocking_factors=[],
                 summary="test",
             ),
+            "strategy_candles": [],
         }
+
+    def _candles_for_prices(
+        self,
+        symbol: str,
+        prices: list[float],
+        volumes: list[float] | None = None,
+    ):
+        candles = []
+        base = datetime(2025, 1, 1)
+        if volumes is None:
+            volumes = [10.0] * len(prices)
+        for idx, price in enumerate(prices):
+            candles.append(
+                OHLCV(
+                    symbol=symbol,
+                    open=price,
+                    high=price * 1.001,
+                    low=price * 0.999,
+                    close=price,
+                    volume=volumes[idx],
+                    timestamp=base + timedelta(minutes=5 * idx),
+                    is_closed=True,
+                )
+            )
+        return candles
 
     def test_core_symbol_gets_priority_bonus_in_ranking(self, default_config):
         monitor = self._build_monitor(default_config)
@@ -475,3 +533,164 @@ class TestMonitorCandidateSelection:
 
         assert monitor._active_symbol_count() == 2
         assert monitor._active_symbol_count(exclude_symbols={"BTC/USDT"}) == 1
+
+    def test_relative_strength_filter_rejects_weak_candidate(self, default_config):
+        monitor = self._build_monitor(
+            default_config,
+            strategy_overrides={
+                "relative_strength_enabled": True,
+                "relative_strength_lookback_bars": 5,
+                "relative_strength_vol_window": 8,
+                "relative_strength_min_score": -0.05,
+            },
+        )
+        strategy = self._StrategyStub()
+        prices = [100, 100.2, 100.1, 99.9, 99.7, 99.5, 99.3, 99.1, 98.9, 98.8]
+        ranked = monitor._rank_buy_candidates(
+            [
+                {
+                    **self._candidate("LINK/USDT", "risk_on", entry=0.83),
+                    "strategy": strategy,
+                    "intent": {"symbol": "LINK/USDT"},
+                    "current_price": 98.8,
+                    "strategy_candles": self._candles_for_prices("LINK/USDT", prices),
+                }
+            ]
+        )
+        assert ranked == []
+        assert len(strategy.cancelled_orders) == 1
+
+    def test_relative_strength_vol_filter_blocks_overheated_candidate(self, default_config):
+        monitor = self._build_monitor(
+            default_config,
+            strategy_overrides={
+                "relative_strength_enabled": True,
+                "relative_strength_lookback_bars": 4,
+                "relative_strength_vol_window": 6,
+                "relative_strength_vol_percentile": 0.40,
+            },
+        )
+        strategy = self._StrategyStub()
+        prices = [100, 100.1, 100.2, 100.25, 100.3, 100.35, 104, 96, 105, 95]
+        ranked = monitor._rank_buy_candidates(
+            [
+                {
+                    **self._candidate("BTC/USDT", "risk_on", entry=0.90),
+                    "strategy": strategy,
+                    "intent": {"symbol": "BTC/USDT"},
+                    "current_price": 95.0,
+                    "strategy_candles": self._candles_for_prices("BTC/USDT", prices),
+                }
+            ]
+        )
+        assert ranked == []
+        assert len(strategy.cancelled_orders) == 1
+
+    def test_symbol_underperformance_raises_entry_threshold(self, default_config):
+        monitor = self._build_monitor(
+            default_config,
+            strategy_overrides={
+                "symbol_performance_enabled": True,
+                "core_underperformance_penalty": 0.05,
+                "core_underperformance_threshold": -0.01,
+            },
+        )
+        monitor.strategies["BTC/USDT"]._recent_trade_returns.extend([-0.03, -0.02, -0.01])
+        strategy = self._StrategyStub()
+        ranked = monitor._rank_buy_candidates(
+            [
+                {
+                    **self._candidate("BTC/USDT", "risk_on", entry=0.75),
+                    "strategy": strategy,
+                    "intent": {"symbol": "BTC/USDT"},
+                    "current_price": 100.0,
+                    "strategy_candles": self._candles_for_prices("BTC/USDT", [100 + i for i in range(12)]),
+                }
+            ]
+        )
+        assert ranked == []
+        assert len(strategy.cancelled_orders) == 1
+
+    def test_volume_weighted_momentum_damps_low_volume_candidate(self, default_config):
+        monitor = self._build_monitor(
+            default_config,
+            strategy_overrides={
+                "relative_strength_enabled": True,
+                "relative_strength_lookback_bars": 5,
+                "relative_strength_vol_window": 8,
+                "volume_weighted_momentum_enabled": True,
+                "volume_momentum_short_window": 3,
+                "volume_momentum_long_window": 6,
+                "volume_ratio_cap": 4.0,
+            },
+        )
+        candles = self._candles_for_prices(
+            "BTC/USDT",
+            [100.0, 100.3, 100.5, 100.7, 100.9, 101.1, 101.3, 101.5, 101.7, 101.9],
+            [20.0, 18.0, 19.0, 17.0, 16.0, 15.0, 3.0, 2.5, 2.0, 1.5],
+        )
+        metrics = monitor._compute_selection_metrics(candles)
+
+        assert metrics["volume_ratio"] < 0.5
+        assert metrics["volume_weighted_momentum"] < metrics["vol_adjusted_momentum"]
+
+    def test_candidate_cohort_gate_blocks_indistinct_top_rank(self, default_config):
+        monitor = self._build_monitor(
+            default_config,
+            strategy_overrides={
+                "relative_strength_enabled": False,
+                "symbol_performance_enabled": False,
+                "candidate_cohort_gate_enabled": True,
+                "no_trade_min_candidate_score": 0.0,
+                "no_trade_min_score_margin": 0.03,
+                "core_priority_bonus": 0.0,
+            },
+        )
+        strategy_a = self._StrategyStub()
+        strategy_b = self._StrategyStub()
+        ranked = monitor._rank_buy_candidates(
+            [
+                {
+                    **self._candidate("BTC/USDT", "risk_on", entry=0.80),
+                    "strategy": strategy_a,
+                    "intent": {"symbol": "BTC/USDT"},
+                    "current_price": 100.0,
+                },
+                {
+                    **self._candidate("ETH/USDT", "risk_on", entry=0.80),
+                    "strategy": strategy_b,
+                    "intent": {"symbol": "ETH/USDT"},
+                    "current_price": 100.0,
+                },
+            ]
+        )
+
+        assert ranked == []
+        assert len(strategy_a.cancelled_orders) == 1
+        assert len(strategy_b.cancelled_orders) == 1
+
+    def test_candidate_cohort_gate_blocks_weak_single_candidate(self, default_config):
+        monitor = self._build_monitor(
+            default_config,
+            strategy_overrides={
+                "relative_strength_enabled": False,
+                "symbol_performance_enabled": False,
+                "candidate_cohort_gate_enabled": True,
+                "no_trade_min_candidate_score": 0.90,
+                "no_trade_min_score_margin": 0.0,
+            },
+        )
+        strategy = self._StrategyStub()
+        ranked = monitor._rank_buy_candidates(
+            [
+                {
+                    **self._candidate("BTC/USDT", "risk_on", entry=0.80),
+                    "strategy": strategy,
+                    "intent": {"symbol": "BTC/USDT"},
+                    "current_price": 100.0,
+                }
+            ]
+        )
+
+        assert ranked == []
+        assert len(strategy.cancelled_orders) == 1

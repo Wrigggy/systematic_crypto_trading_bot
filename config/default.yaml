@@ -81,6 +81,15 @@ strategy:
   model_size_weight: 0.15
   neutral_entry_size_multiplier: 0.25
   risk_off_entry_size_multiplier: 0.00
+  volume_weighted_momentum_enabled: false
+  volume_momentum_short_window: 6
+  volume_momentum_long_window: 24
+  volume_ratio_cap: 2.5
+  volume_weighted_momentum_weight: 0.0
+  volume_weighted_momentum_min_score: -999.0
+  candidate_cohort_gate_enabled: false
+  no_trade_min_candidate_score: 0.0
+  no_trade_min_score_margin: 0.0
   min_volatility_size_multiplier: 0.20
   min_volume_ratio: 1.20
   min_order_book_imbalance: 1.04
