@@ -392,7 +392,7 @@ STRATEGY_PROFILES: dict[str, dict] = {
             "estimated_win_rate": 0.58,
             "estimated_payoff": 1.80,
             "confirmation_bars": 1,
-            "min_entry_score": 0.70,
+            "min_entry_score": 0.55,
             "max_blocker_score": 0.28,
             "min_exit_score": 0.35,
             "min_supporting_factors": 1,
