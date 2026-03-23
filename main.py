@@ -397,7 +397,7 @@ STRATEGY_PROFILES: dict[str, dict] = {
             "min_exit_score": 0.35,
             "min_supporting_factors": 2,
             "min_supporting_categories": 2,
-            "require_trend_alignment": True,
+            "require_trend_alignment": False,
             "require_bollinger_signal": True,
             "urgent_entry_score": 0.90,
             "signal_horizon_minutes": 480,

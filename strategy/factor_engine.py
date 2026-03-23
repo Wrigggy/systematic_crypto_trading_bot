@@ -761,11 +761,14 @@ class FactorEngine:
 
         if bb_width < self._bb_min_width or bb_middle <= 0:
             pass
-        elif bb_pctb <= 0.15 and rsi_value < self._bb_rsi_oversold and hourly_trend_bullish:
+        elif bb_pctb <= 0.15 and rsi_value < self._bb_rsi_oversold:
             # Price near or below lower band (pctb <= 0.15 means within bottom 15% of bands)
             depth = max(0.0, 0.15 - bb_pctb)
             rsi_extremity = _clamp((self._bb_rsi_oversold - rsi_value) / 15.0)
-            strength = _clamp(0.6 * min(depth / 0.3, 1.0) + 0.4 * rsi_extremity)
+            base_strength = _clamp(0.6 * min(depth / 0.3, 1.0) + 0.4 * rsi_extremity)
+            # 1h trend is a soft multiplier: bullish=1.0, bearish=0.6 (still triggers, lower conviction)
+            trend_mult = 1.0 if hourly_trend_bullish else 0.6
+            strength = _clamp(base_strength * trend_mult)
             bias = FactorBias.BULLISH
         elif bb_pctb >= 0.85:
             # Price near or above upper band (for exit scoring)
