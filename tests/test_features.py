@@ -124,6 +124,34 @@ class TestExtract:
         assert extractor.min_candles >= 14  # at least max(rsi, ema_slow, atr) + 2
 
 
+class TestBollingerBands:
+    def test_bollinger_bands_basic(self):
+        """BB(20,2) on constant-price series should have zero width."""
+        from features.extractor import FeatureExtractor
+        closes = [100.0] * 25
+        upper, middle, lower = FeatureExtractor.compute_bollinger_bands(closes, period=20, num_std=2.0)
+        assert middle == pytest.approx(100.0)
+        assert upper == pytest.approx(100.0)
+        assert lower == pytest.approx(100.0)
+
+    def test_bollinger_bands_trending(self):
+        """BB on trending data should have middle = SMA, bands symmetric."""
+        from features.extractor import FeatureExtractor
+        closes = [float(i) for i in range(1, 26)]
+        upper, middle, lower = FeatureExtractor.compute_bollinger_bands(closes, period=20, num_std=2.0)
+        assert middle == pytest.approx(15.5)
+        assert upper > middle
+        assert lower < middle
+        assert (upper - middle) == pytest.approx(middle - lower, abs=0.01)
+
+    def test_bollinger_bands_insufficient_data(self):
+        """Return zeros when not enough data."""
+        from features.extractor import FeatureExtractor
+        closes = [100.0] * 5
+        upper, middle, lower = FeatureExtractor.compute_bollinger_bands(closes, period=20, num_std=2.0)
+        assert upper == 0.0 and middle == 0.0 and lower == 0.0
+
+
 class TestExtractSequence:
     def test_shape(self, extractor, candles_120):
         seq = extractor.extract_sequence(candles_120, seq_len=30)

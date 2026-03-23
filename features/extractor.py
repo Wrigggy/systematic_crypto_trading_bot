@@ -93,6 +93,18 @@ class FeatureExtractor:
                 closes, max(5, self._volatility_window // 2)
             ),
         }
+        bb_upper, bb_middle, bb_lower = self.compute_bollinger_bands(closes, period=20, num_std=2.0)
+        bb_width = (bb_upper - bb_lower) / bb_middle if bb_middle > 0 else 0.0
+        bb_pctb = (
+            (closes[-1] - bb_lower) / (bb_upper - bb_lower)
+            if (bb_upper - bb_lower) > 1e-10
+            else 0.5
+        )
+        raw["bb_upper"] = bb_upper
+        raw["bb_middle"] = bb_middle
+        raw["bb_lower"] = bb_lower
+        raw["bb_width"] = bb_width
+        raw["bb_pctb"] = bb_pctb
 
         return FeatureVector(
             symbol=candles[-1].symbol,
@@ -488,3 +500,17 @@ class FeatureExtractor:
             return 0.0
         mean = float(np.mean(hist))
         return float((candles[-1].volume - mean) / std)
+
+    @staticmethod
+    def compute_bollinger_bands(
+        closes: List[float], period: int = 20, num_std: float = 2.0
+    ) -> tuple[float, float, float]:
+        """Bollinger Bands: (upper, middle, lower). Returns (0,0,0) if insufficient data."""
+        if len(closes) < period:
+            return 0.0, 0.0, 0.0
+        window = closes[-period:]
+        middle = float(np.mean(window))
+        std = float(np.std(window))
+        upper = middle + num_std * std
+        lower = middle - num_std * std
+        return upper, middle, lower
