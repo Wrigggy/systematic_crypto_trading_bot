@@ -33,6 +33,7 @@ class FactorEngine:
             "liquidity_balance": 0.10,
             "perp_crowding": 0.15,
             "volatility_regime": 0.10,
+            "bollinger_mean_reversion": 0.0,
             **strategy_cfg.get("factor_weights", {}),
         }
         self._min_volume_ratio: float = strategy_cfg.get("min_volume_ratio", 1.10)
@@ -103,6 +104,11 @@ class FactorEngine:
         self._overextension_min_taker_ratio: float = strategy_cfg.get(
             "overextension_min_taker_ratio", 1.02
         )
+        self._bb_period: int = strategy_cfg.get("bb_period", 20)
+        self._bb_std_dev: float = strategy_cfg.get("bb_std_dev", 2.0)
+        self._bb_rsi_oversold: float = strategy_cfg.get("bb_rsi_oversold", 35.0)
+        self._bb_rsi_deeply_oversold: float = strategy_cfg.get("bb_rsi_deeply_oversold", 25.0)
+        self._bb_min_width: float = strategy_cfg.get("bb_min_width", 0.02)
 
     def evaluate(
         self,
@@ -126,6 +132,7 @@ class FactorEngine:
             self._liquidity_balance(features, supp),
             self._perp_crowding(features, supp, hist),
             self._volatility_regime(features),
+            self._bollinger_mean_reversion(features, candles_1h),
         ]
 
         support_weight = 0.0
@@ -706,3 +713,62 @@ class FactorEngine:
             invalidate_condition="Volatility cools back into the strategy operating range",
             metadata={"volatility": features.volatility},
         )
+
+    def _bollinger_mean_reversion(
+        self,
+        features: FeatureVector,
+        candles_1h: Optional[List[OHLCV]] = None,
+    ) -> FactorObservation:
+        bb_upper = float(features.raw.get("bb_upper", 0.0))
+        bb_middle = float(features.raw.get("bb_middle", 0.0))
+        bb_lower = float(features.raw.get("bb_lower", 0.0))
+        bb_width = float(features.raw.get("bb_width", 0.0))
+        bb_pctb = float(features.raw.get("bb_pctb", 0.5))
+
+        hourly_trend_bullish = True
+        if candles_1h and len(candles_1h) >= 30:
+            closes_1h = [c.close for c in candles_1h]
+            ema12 = self._compute_ema_value(closes_1h, 12)
+            ema26 = self._compute_ema_value(closes_1h, 26)
+            hourly_trend_bullish = ema12 > ema26
+
+        bias = FactorBias.NEUTRAL
+        strength = 0.0
+
+        if bb_width < self._bb_min_width or bb_middle <= 0:
+            pass
+        elif bb_pctb <= 0.0 and features.rsi < self._bb_rsi_oversold and hourly_trend_bullish:
+            depth = max(0.0, -bb_pctb)
+            rsi_extremity = _clamp((self._bb_rsi_oversold - features.rsi) / 15.0)
+            strength = _clamp(0.6 * min(depth / 0.5, 1.0) + 0.4 * rsi_extremity)
+            bias = FactorBias.BULLISH
+        elif bb_pctb >= 1.0:
+            overshoot = bb_pctb - 1.0
+            strength = _clamp(overshoot / 0.5)
+            bias = FactorBias.BEARISH
+
+        return FactorObservation(
+            symbol=features.symbol,
+            name="bollinger_mean_reversion",
+            category="entry_timing",
+            timestamp=features.timestamp,
+            bias=bias,
+            strength=strength if bias != FactorBias.NEUTRAL else 0.0,
+            value=bb_pctb,
+            threshold=0.0,
+            horizon_minutes=480,
+            expected_move_bps=80.0 + 200.0 * strength,
+            thesis=f"BB %B={bb_pctb:.2f}, width={bb_width:.4f}, RSI={features.rsi:.1f}, 1h_trend={'up' if hourly_trend_bullish else 'down'}",
+            invalidate_condition="Price returns to middle band or 1h trend reverses",
+            metadata={"bb_pctb": bb_pctb, "bb_width": bb_width, "bb_upper": bb_upper, "bb_middle": bb_middle, "bb_lower": bb_lower, "rsi": features.rsi, "hourly_trend_bullish": hourly_trend_bullish},
+        )
+
+    @staticmethod
+    def _compute_ema_value(values: list[float], period: int) -> float:
+        if not values:
+            return 0.0
+        multiplier = 2.0 / (period + 1)
+        ema = values[0]
+        for val in values[1:]:
+            ema = val * multiplier + ema * (1 - multiplier)
+        return ema

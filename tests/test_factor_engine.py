@@ -244,3 +244,55 @@ class TestFactorEngine:
         )
         assert overextension.bias == FactorBias.BEARISH
         assert overextension.strength > 0.0
+
+
+class TestBollingerMeanReversionFactor:
+    def test_bullish_when_price_at_lower_band_and_rsi_oversold(self):
+        engine = FactorEngine({
+            "strategy": {"bb_period": 20, "bb_std_dev": 2.0, "bb_rsi_oversold": 35, "bb_min_width": 0.02,
+                         "factor_weights": {"bollinger_mean_reversion": 0.40}},
+        })
+        features = _feature_vector(rsi=28.0, raw={
+            "breakout_distance": 0.0, "trend_slope": 0.001, "volume_zscore": 0.5,
+            "bb_upper": 105.0, "bb_middle": 100.0, "bb_lower": 95.0, "bb_width": 0.10, "bb_pctb": -0.05,
+        })
+        candles_1h = _candles(95.0, 0.5, 30)  # rising = uptrend
+        snapshot = engine.evaluate(features, candles_1h=candles_1h)
+        bb_obs = next(obs for obs in snapshot.observations if obs.name == "bollinger_mean_reversion")
+        assert bb_obs.bias == FactorBias.BULLISH
+        assert bb_obs.strength > 0.0
+
+    def test_bearish_when_price_at_upper_band(self):
+        engine = FactorEngine({
+            "strategy": {"bb_period": 20, "bb_std_dev": 2.0, "bb_rsi_oversold": 35, "bb_min_width": 0.02,
+                         "factor_weights": {"bollinger_mean_reversion": 0.40}},
+        })
+        features = _feature_vector(rsi=72.0, raw={
+            "breakout_distance": 0.0, "trend_slope": 0.001, "volume_zscore": 0.5,
+            "bb_upper": 105.0, "bb_middle": 100.0, "bb_lower": 95.0, "bb_width": 0.10, "bb_pctb": 1.05,
+        })
+        snapshot = engine.evaluate(features)
+        bb_obs = next(obs for obs in snapshot.observations if obs.name == "bollinger_mean_reversion")
+        assert bb_obs.bias == FactorBias.BEARISH
+        assert bb_obs.strength > 0.0
+
+    def test_neutral_during_band_squeeze(self):
+        engine = FactorEngine({"strategy": {"bb_min_width": 0.02, "factor_weights": {"bollinger_mean_reversion": 0.40}}})
+        features = _feature_vector(rsi=28.0, raw={
+            "breakout_distance": 0.0, "trend_slope": 0.001, "volume_zscore": 0.5,
+            "bb_upper": 100.5, "bb_middle": 100.0, "bb_lower": 99.5, "bb_width": 0.01, "bb_pctb": -0.05,
+        })
+        snapshot = engine.evaluate(features)
+        bb_obs = next(obs for obs in snapshot.observations if obs.name == "bollinger_mean_reversion")
+        assert bb_obs.bias == FactorBias.NEUTRAL
+
+    def test_neutral_when_rsi_not_oversold(self):
+        engine = FactorEngine({"strategy": {"bb_rsi_oversold": 35, "bb_min_width": 0.02,
+                                            "factor_weights": {"bollinger_mean_reversion": 0.40}}})
+        features = _feature_vector(rsi=50.0, raw={
+            "breakout_distance": 0.0, "trend_slope": 0.001, "volume_zscore": 0.5,
+            "bb_upper": 105.0, "bb_middle": 100.0, "bb_lower": 95.0, "bb_width": 0.10, "bb_pctb": -0.05,
+        })
+        snapshot = engine.evaluate(features)
+        bb_obs = next(obs for obs in snapshot.observations if obs.name == "bollinger_mean_reversion")
+        assert bb_obs.bias == FactorBias.NEUTRAL
