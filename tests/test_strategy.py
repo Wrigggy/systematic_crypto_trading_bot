@@ -12,6 +12,7 @@ from core.models import (
     Order,
     OrderStatus,
     OrderType,
+    Position,
     PortfolioSnapshot,
     Side,
     StrategyState,
@@ -479,3 +480,79 @@ class TestFactorFirstStateMachine:
         assert len(tracker.trades) == 1
         assert tracker.trades[0][0] == pytest.approx(100.0)
         assert tracker.trades[0][1] == pytest.approx(111.2)
+
+
+class TestGraduatedFactorExit:
+    @staticmethod
+    def _holding_portfolio(cash=50000.0, qty=1.0, price=100000.0):
+        pos = Position(
+            symbol="BTC/USDT", quantity=qty, entry_price=price,
+            current_price=price, state=StrategyState.HOLDING,
+        )
+        return PortfolioSnapshot(
+            timestamp=datetime(2026, 1, 1),
+            cash=cash,
+            nav=cash + qty * price,
+            positions=[pos],
+            daily_pnl=0.0,
+            peak_nav=cash + qty * price,
+            drawdown=0.0,
+            daily_drawdown=0.0,
+        )
+
+    def test_partial_exit_at_first_tier(self):
+        config = {
+            "strategy": {
+                "min_entry_score": 0.65, "min_exit_score": 0.35, "max_blocker_score": 0.30,
+                "exit_tiers": [{"threshold": 0.40, "sell_pct": 0.50}, {"threshold": 0.70, "sell_pct": 1.00}],
+            },
+            "alpha": {},
+        }
+        logic = StrategyLogic("BTC/USDT", config)
+        logic._state = StrategyState.HOLDING
+        logic._entry_price = 95000.0
+        logic._entry_time = datetime(2026, 1, 1, 0, 0)
+        portfolio = self._holding_portfolio()
+        factors = _factor_snapshot(exit_score=0.45, blocker_score=0.0)
+        intent = logic.on_factors(factors, portfolio, current_price=100000.0)
+        assert intent is not None
+        assert intent.direction == Side.SELL
+        assert intent.quantity == pytest.approx(0.5, rel=0.01)
+
+    def test_time_based_exit_after_max_hold(self):
+        config = {
+            "strategy": {
+                "min_entry_score": 0.65, "min_exit_score": 0.35, "max_blocker_score": 0.30,
+                "bb_max_hold_hours": 24, "exit_tiers": [],
+            },
+            "alpha": {},
+        }
+        logic = StrategyLogic("BTC/USDT", config)
+        logic._state = StrategyState.HOLDING
+        logic._entry_price = 95000.0
+        logic._entry_time = datetime(2026, 1, 1, 0, 0)
+        portfolio = self._holding_portfolio(qty=1.0, price=96000.0)
+        factors = _factor_snapshot(exit_score=0.10, blocker_score=0.10)
+        factors.timestamp = datetime(2026, 1, 2, 1, 0)  # 25h after entry
+        intent = logic.on_factors(factors, portfolio, current_price=96000.0)
+        assert intent is not None
+        assert intent.direction == Side.SELL
+        assert intent.quantity == pytest.approx(1.0)
+
+    def test_existing_blocker_exit_still_works(self):
+        config = {
+            "strategy": {
+                "min_entry_score": 0.65, "min_exit_score": 0.35, "max_blocker_score": 0.30,
+                "exit_tiers": [{"threshold": 0.40, "sell_pct": 0.50}, {"threshold": 0.70, "sell_pct": 1.00}],
+            },
+            "alpha": {},
+        }
+        logic = StrategyLogic("BTC/USDT", config)
+        logic._state = StrategyState.HOLDING
+        logic._entry_price = 95000.0
+        logic._entry_time = datetime(2026, 1, 1, 0, 0)
+        portfolio = self._holding_portfolio()
+        factors = _factor_snapshot(exit_score=0.10, blocker_score=0.50)
+        intent = logic.on_factors(factors, portfolio, current_price=100000.0)
+        assert intent is not None
+        assert intent.direction == Side.SELL

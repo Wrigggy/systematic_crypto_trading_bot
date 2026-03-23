@@ -68,6 +68,10 @@ class StrategyLogic:
         self._exit_tiers: List[Dict] = strategy_cfg.get("exit_tiers", [])
         self._exit_tier_reached: int = 0
 
+        # Time-based exit
+        self._entry_time: Optional[datetime] = None
+        self._bb_max_hold_hours: float = strategy_cfg.get("bb_max_hold_hours", 0)
+
         # Track entry price for adaptive Kelly (read before tracker zeroes it on sell)
         self._entry_price: float = 0.0
         self._initial_hold_qty: float = 0.0
@@ -344,6 +348,43 @@ class StrategyLogic:
                 self.force_flat()
                 return None
 
+            # Time-based exit
+            if (
+                self._bb_max_hold_hours > 0
+                and self._entry_time is not None
+                and factors.timestamp > self._entry_time + timedelta(hours=self._bb_max_hold_hours)
+                and self._exit_tier_reached == 0
+            ):
+                intent = self._build_exit_intent(
+                    factors, portfolio, pos_qty, current_price,
+                    reasoning=reasoning + [f"Max hold time {self._bb_max_hold_hours}h exceeded"],
+                )
+                self._state = StrategyState.EXIT_PENDING
+                self._reset_exit_fill_tracking()
+                logger.info("[%s] time-based exit: held > %dh", self._symbol, self._bb_max_hold_hours)
+                return intent
+
+            # Graduated factor exit (exit_score rises above tiers)
+            if self._exit_tiers:
+                for i, tier in enumerate(self._exit_tiers):
+                    if i <= self._exit_tier_reached - 1:
+                        continue
+                    if effective_exit >= tier["threshold"]:
+                        sell_pct = tier["sell_pct"]
+                        sell_qty = pos_qty * sell_pct if sell_pct < 1.0 else pos_qty
+                        sell_qty = min(sell_qty, pos_qty)
+                        self._exit_tier_reached = i + 1
+                        intent = self._build_exit_intent(
+                            factors, portfolio, sell_qty, current_price,
+                            reasoning=reasoning + [f"Exit tier {i+1}: exit_score {effective_exit:.3f} >= {tier['threshold']}"],
+                        )
+                        self._state = StrategyState.EXIT_PENDING
+                        self._reset_exit_fill_tracking()
+                        logger.info("[%s] graduated factor exit tier %d: exit_score=%.3f, sell_pct=%.2f, qty=%.6f",
+                                   self._symbol, i + 1, effective_exit, sell_pct, sell_qty)
+                        return intent
+
+            # Fallback: original exit logic
             if effective_exit < self._min_exit_score and effective_blocker < self._max_blocker_score:
                 return None
 
@@ -535,6 +576,7 @@ class StrategyLogic:
                 )
             else:
                 self._state = StrategyState.HOLDING
+                self._entry_time = getattr(order, 'created_at', None) or datetime.utcnow()
                 logger.info(
                     "[%s] LONG_PENDING → HOLDING (filled @ %.2f)",
                     self._symbol,
@@ -601,6 +643,7 @@ class StrategyLogic:
         self._factor_history.clear()
         self._exit_tier_reached = 0
         self._entry_price = 0.0
+        self._entry_time = None
         self._entry_filled_qty = 0.0
         self._reset_exit_fill_tracking()
 
@@ -753,6 +796,36 @@ class StrategyLogic:
     def _reset_exit_fill_tracking(self) -> None:
         self._exit_filled_qty = 0.0
         self._exit_fill_notional = 0.0
+
+    def _build_exit_intent(
+        self,
+        factors: FactorSnapshot,
+        portfolio: PortfolioSnapshot,
+        qty: float,
+        current_price: float,
+        reasoning: list | None = None,
+    ) -> StrategyIntent:
+        size_notional = qty * current_price
+        return StrategyIntent(
+            signal_time=factors.timestamp,
+            symbol=self._symbol,
+            direction=Side.SELL,
+            thesis=self._compose_exit_thesis(factors.blocking_factors, reasoning or []),
+            entry_type=OrderType.MARKET,
+            entry_price=None,
+            size_pct=size_notional / portfolio.nav if portfolio.nav > 0 else 0.0,
+            size_notional=size_notional,
+            quantity=qty,
+            signal_horizon=self._format_horizon(self._exit_horizon_minutes),
+            expected_move="Protect capital",
+            stop_loss="Exit immediately",
+            take_profit="N/A",
+            invalidate_condition="Exit cancelled only if factors clear",
+            urgency=UrgencyLevel.HIGH,
+            confidence=min(1.0, max(0.0, factors.exit_score)),
+            factor_names=factors.blocking_factors,
+            reasoning=(reasoning or [])[:4],
+        )
 
     @staticmethod
     def _format_horizon(minutes: int) -> str:
