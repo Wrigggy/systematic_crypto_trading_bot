@@ -38,10 +38,14 @@ class RiskShield:
 
         self._order_timestamps: deque = deque(maxlen=100)
         self._circuit_breaker_active: bool = False
+        self._volatility_manager = None
 
     @property
     def circuit_breaker_active(self) -> bool:
         return self._circuit_breaker_active
+
+    def set_volatility_manager(self, manager) -> None:
+        self._volatility_manager = manager
 
     def validate(
         self,
@@ -103,15 +107,25 @@ class RiskShield:
                 price = pos.current_price if pos.current_price > 0 else 1.0
 
             order_value = price * order.quantity
+            dynamic_single_exposure = self._max_single_exposure
+            dynamic_portfolio_exposure = self._max_portfolio_exposure
+            if self._volatility_manager is not None:
+                vol_profile = self._volatility_manager.profile(order.symbol)
+                dynamic_single_exposure *= vol_profile[
+                    "single_exposure_multiplier"
+                ]
+                dynamic_portfolio_exposure *= vol_profile[
+                    "portfolio_exposure_multiplier"
+                ]
 
             # Single exposure check
             current_exposure = tracker.get_exposure(order.symbol)
             new_single_exposure = current_exposure + (
                 order_value / snapshot.nav if snapshot.nav > 0 else 1.0
             )
-            if new_single_exposure > self._max_single_exposure:
+            if new_single_exposure > dynamic_single_exposure:
                 max_value = (
-                    self._max_single_exposure - current_exposure
+                    dynamic_single_exposure - current_exposure
                 ) * snapshot.nav
                 if max_value <= 0:
                     logger.warning(
@@ -131,9 +145,9 @@ class RiskShield:
             new_total = total_exposure + (
                 order_value / snapshot.nav if snapshot.nav > 0 else 1.0
             )
-            if new_total > self._max_portfolio_exposure:
+            if new_total > dynamic_portfolio_exposure:
                 max_value = (
-                    self._max_portfolio_exposure - total_exposure
+                    dynamic_portfolio_exposure - total_exposure
                 ) * snapshot.nav
                 if max_value <= 0:
                     logger.warning(
@@ -184,13 +198,19 @@ class RiskShield:
 
             current_price = candle.close
             tracker.update_prices(symbol, current_price)
+            trailing_stop_pct = self._trailing_stop_pct
+            atr_stop_multiplier = self._atr_stop_multiplier
+            if self._volatility_manager is not None:
+                vol_profile = self._volatility_manager.profile(symbol)
+                trailing_stop_pct *= vol_profile["stop_multiplier"]
+                atr_stop_multiplier *= vol_profile["stop_multiplier"]
 
             triggered = False
             reason = ""
 
             # Trailing stop
             if pos.peak_price > 0:
-                stop_price = pos.peak_price * (1 - self._trailing_stop_pct)
+                stop_price = pos.peak_price * (1 - trailing_stop_pct)
                 reason = (
                     f"trailing stop (peak={pos.peak_price:.2f}, stop={stop_price:.2f})"
                 )
@@ -220,7 +240,7 @@ class RiskShield:
             # ATR stop
             if not triggered and symbol in atr_values:
                 atr = atr_values[symbol]
-                atr_stop_price = pos.entry_price - (atr * self._atr_stop_multiplier)
+                atr_stop_price = pos.entry_price - (atr * atr_stop_multiplier)
                 if current_price <= atr_stop_price:
                     triggered = True
                     reason = f"ATR stop (entry={pos.entry_price:.2f}, atr={atr:.2f}, stop={atr_stop_price:.2f})"

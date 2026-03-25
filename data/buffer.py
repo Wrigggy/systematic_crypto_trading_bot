@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import time
 from collections import deque
 from typing import Dict, List, Optional
 
 from core.models import OHLCV, Tick
+from onchain.schema import ONCHAIN_METRIC_KEYS
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +22,7 @@ class LiveBuffer:
     """
 
     def __init__(self, max_candles: int = 500, max_ticks: int = 5000):
+        self._onchain_metric_keys = ONCHAIN_METRIC_KEYS
         self._max_candles = max_candles
         self._max_ticks = max_ticks
         self._candles: Dict[str, deque] = {}  # symbol → deque[OHLCV]
@@ -28,11 +31,13 @@ class LiveBuffer:
         self._funding_data: Dict[str, float] = {}  # latest funding rate per symbol
         self._taker_data: Dict[str, float] = {}  # latest taker ratio per symbol
         self._open_interest_data: Dict[str, float] = {}  # latest open interest per symbol
+        self._onchain_data: Dict[str, dict] = {}  # latest on-chain sidecar metrics per symbol
         # Per-candle supplementary history (mirrors candle deque size)
         self._obi_history: Dict[str, deque] = {}
         self._funding_history: Dict[str, deque] = {}
         self._taker_history: Dict[str, deque] = {}
         self._open_interest_history: Dict[str, deque] = {}
+        self._onchain_history: Dict[str, Dict[str, deque]] = {}
         self._lock = asyncio.Lock()
         self._event = asyncio.Event()
         # Resampled candle storage: {minutes: {symbol: deque[OHLCV]}}
@@ -133,12 +138,39 @@ class LiveBuffer:
             self._open_interest_history[symbol].append(open_interest)
             self._supp_last_update[f"{symbol}:open_interest"] = time.monotonic()
 
+    async def push_onchain_metrics(self, symbol: str, metrics: dict) -> None:
+        """Store latest on-chain sidecar metrics for a symbol."""
+        async with self._lock:
+            state = self._onchain_data.setdefault(symbol, {})
+            history = self._onchain_history.setdefault(
+                symbol,
+                {
+                    key: deque(maxlen=self._max_candles)
+                    for key in self._onchain_metric_keys
+                },
+            )
+            for key in self._onchain_metric_keys:
+                if key not in metrics or metrics[key] is None:
+                    continue
+                value = float(metrics[key])
+                if not math.isfinite(value):
+                    continue
+                state[key] = value
+                history[key].append(value)
+                self._supp_last_update[f"{symbol}:{key}"] = time.monotonic()
+
     async def get_supplementary(self, symbol: str) -> dict:
         """Get all supplementary data for a symbol."""
         async with self._lock:
             # Warn if supplementary data is stale
             now = time.monotonic()
-            for key_suffix in ("depth", "funding", "taker", "open_interest"):
+            for key_suffix in (
+                "depth",
+                "funding",
+                "taker",
+                "open_interest",
+                *self._onchain_metric_keys,
+            ):
                 key = f"{symbol}:{key_suffix}"
                 last = self._supp_last_update.get(key)
                 if last is not None and (now - last) > self._supp_stale_threshold:
@@ -149,15 +181,64 @@ class LiveBuffer:
                         now - last,
                     )
             depth = self._depth_data.get(symbol, {})
+            onchain = self._onchain_data.get(symbol, {})
             return {
                 "order_book_imbalance": depth.get("order_book_imbalance", 0.0),
                 "funding_rate": self._funding_data.get(symbol, 0.0),
                 "taker_ratio": self._taker_data.get(symbol, 0.0),
                 "open_interest": self._open_interest_data.get(symbol, 0.0),
+                "onchain_mvrv_ratio": onchain.get("onchain_mvrv_ratio", 0.0),
+                "onchain_active_addresses": onchain.get(
+                    "onchain_active_addresses", 0.0
+                ),
+                "onchain_tx_count": onchain.get("onchain_tx_count", 0.0),
+                "onchain_market_cap_usd": onchain.get(
+                    "onchain_market_cap_usd", 0.0
+                ),
+                "onchain_nvt_proxy": onchain.get("onchain_nvt_proxy", 0.0),
+                "onchain_chain_tvl_usd": onchain.get("onchain_chain_tvl_usd", 0.0),
+                "onchain_chain_stablecoin_supply_usd": onchain.get(
+                    "onchain_chain_stablecoin_supply_usd", 0.0
+                ),
+                "onchain_chain_dex_volume_usd": onchain.get(
+                    "onchain_chain_dex_volume_usd", 0.0
+                ),
+                "onchain_chain_fees_usd": onchain.get("onchain_chain_fees_usd", 0.0),
+                "onchain_exchange_netflow_ratio": onchain.get(
+                    "onchain_exchange_netflow_ratio", 0.0
+                ),
+                "onchain_whale_transfer_ratio": onchain.get(
+                    "onchain_whale_transfer_ratio", 0.0
+                ),
+                "onchain_holder_concentration": onchain.get(
+                    "onchain_holder_concentration", 0.0
+                ),
                 "has_order_book_imbalance": "order_book_imbalance" in depth,
                 "has_funding_rate": symbol in self._funding_data,
                 "has_taker_ratio": symbol in self._taker_data,
                 "has_open_interest": symbol in self._open_interest_data,
+                "has_onchain_mvrv_ratio": "onchain_mvrv_ratio" in onchain,
+                "has_onchain_active_addresses": "onchain_active_addresses" in onchain,
+                "has_onchain_tx_count": "onchain_tx_count" in onchain,
+                "has_onchain_market_cap_usd": "onchain_market_cap_usd" in onchain,
+                "has_onchain_nvt_proxy": "onchain_nvt_proxy" in onchain,
+                "has_onchain_chain_tvl_usd": "onchain_chain_tvl_usd" in onchain,
+                "has_onchain_chain_stablecoin_supply_usd": (
+                    "onchain_chain_stablecoin_supply_usd" in onchain
+                ),
+                "has_onchain_chain_dex_volume_usd": (
+                    "onchain_chain_dex_volume_usd" in onchain
+                ),
+                "has_onchain_chain_fees_usd": "onchain_chain_fees_usd" in onchain,
+                "has_onchain_exchange_netflow_ratio": (
+                    "onchain_exchange_netflow_ratio" in onchain
+                ),
+                "has_onchain_whale_transfer_ratio": (
+                    "onchain_whale_transfer_ratio" in onchain
+                ),
+                "has_onchain_holder_concentration": (
+                    "onchain_holder_concentration" in onchain
+                ),
             }
 
     async def get_supplementary_history(self, symbol: str, n: int) -> dict:
@@ -167,11 +248,48 @@ class LiveBuffer:
             funding = list(self._funding_history.get(symbol, deque()))[-n:]
             taker = list(self._taker_history.get(symbol, deque()))[-n:]
             open_interest = list(self._open_interest_history.get(symbol, deque()))[-n:]
+            onchain_history = self._onchain_history.get(symbol, {})
             return {
                 "order_book_imbalance": obi,
                 "funding_rate": funding,
                 "taker_ratio": taker,
                 "open_interest": open_interest,
+                "onchain_mvrv_ratio": list(
+                    onchain_history.get("onchain_mvrv_ratio", deque())
+                )[-n:],
+                "onchain_active_addresses": list(
+                    onchain_history.get("onchain_active_addresses", deque())
+                )[-n:],
+                "onchain_tx_count": list(
+                    onchain_history.get("onchain_tx_count", deque())
+                )[-n:],
+                "onchain_market_cap_usd": list(
+                    onchain_history.get("onchain_market_cap_usd", deque())
+                )[-n:],
+                "onchain_nvt_proxy": list(
+                    onchain_history.get("onchain_nvt_proxy", deque())
+                )[-n:],
+                "onchain_chain_tvl_usd": list(
+                    onchain_history.get("onchain_chain_tvl_usd", deque())
+                )[-n:],
+                "onchain_chain_stablecoin_supply_usd": list(
+                    onchain_history.get("onchain_chain_stablecoin_supply_usd", deque())
+                )[-n:],
+                "onchain_chain_dex_volume_usd": list(
+                    onchain_history.get("onchain_chain_dex_volume_usd", deque())
+                )[-n:],
+                "onchain_chain_fees_usd": list(
+                    onchain_history.get("onchain_chain_fees_usd", deque())
+                )[-n:],
+                "onchain_exchange_netflow_ratio": list(
+                    onchain_history.get("onchain_exchange_netflow_ratio", deque())
+                )[-n:],
+                "onchain_whale_transfer_ratio": list(
+                    onchain_history.get("onchain_whale_transfer_ratio", deque())
+                )[-n:],
+                "onchain_holder_concentration": list(
+                    onchain_history.get("onchain_holder_concentration", deque())
+                )[-n:],
             }
 
     async def push_resampled(self, minutes: int, candle: OHLCV) -> None:

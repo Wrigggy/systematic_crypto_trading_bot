@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 
 from core.models import FactorBias, FeatureVector, OHLCV
+from strategy.bayesian_symbol_performance import BayesianSymbolPerformanceManager
 from strategy.factor_engine import FactorEngine
 
 
@@ -244,3 +245,261 @@ class TestFactorEngine:
         )
         assert overextension.bias == FactorBias.BEARISH
         assert overextension.strength > 0.0
+
+    def test_volatility_compression_entry_turns_bullish_for_quiet_trend(self):
+        engine = FactorEngine(
+            {
+                "strategy": {
+                    "enable_volatility_compression_entry": True,
+                    "vol_compression_min_breakout_distance": -0.05,
+                    "vol_compression_max_breakout_distance": 0.20,
+                    "vol_compression_min_rsi": 50.0,
+                    "vol_compression_max_rsi": 64.0,
+                    "vol_compression_short_vol_ratio_max": 0.85,
+                    "vol_compression_min_volume_ratio": 0.80,
+                    "vol_compression_max_volume_ratio": 1.15,
+                    "factor_weights": {"volatility_compression_entry": 0.18},
+                },
+                "trend": {"min_trend_slope": 0.0006},
+            }
+        )
+        snapshot = engine.evaluate(
+            _feature_vector(
+                rsi=57.0,
+                volatility=0.010,
+                volume_ratio=0.96,
+                raw={
+                    "breakout_distance": 0.08,
+                    "trend_slope": 0.0010,
+                    "volume_zscore": -0.10,
+                    "realized_vol_short": 0.0065,
+                },
+            )
+        )
+        obs = next(
+            item
+            for item in snapshot.observations
+            if item.name == "volatility_compression_entry"
+        )
+        assert obs.bias == FactorBias.BULLISH
+        assert obs.strength > 0.0
+
+    def test_grid_reversion_entry_turns_bullish_for_shallow_dip(self):
+        engine = FactorEngine(
+            {
+                "strategy": {
+                    "enable_grid_reversion_entry": True,
+                    "grid_reversion_min_breakout_distance": -0.25,
+                    "grid_reversion_max_breakout_distance": 0.04,
+                    "grid_reversion_target_breakout_distance": -0.08,
+                    "grid_reversion_min_rsi": 45.0,
+                    "grid_reversion_max_rsi": 56.0,
+                    "grid_reversion_target_rsi": 50.0,
+                    "grid_reversion_min_momentum": -0.006,
+                    "grid_reversion_max_momentum": 0.004,
+                    "grid_reversion_min_volume_ratio": 0.80,
+                    "grid_reversion_max_volume_ratio": 1.20,
+                    "grid_reversion_short_vol_ratio_max": 1.05,
+                    "factor_weights": {"grid_reversion_entry": 0.14},
+                },
+                "trend": {"min_trend_slope": 0.0006},
+            }
+        )
+        snapshot = engine.evaluate(
+            _feature_vector(
+                rsi=50.0,
+                momentum=-0.0015,
+                volume_ratio=0.92,
+                raw={
+                    "breakout_distance": -0.09,
+                    "trend_slope": 0.0010,
+                    "volume_zscore": 0.05,
+                    "realized_vol_short": 0.0090,
+                },
+            )
+        )
+        obs = next(
+            item for item in snapshot.observations if item.name == "grid_reversion_entry"
+        )
+        assert obs.bias == FactorBias.BULLISH
+        assert obs.strength > 0.0
+
+    def test_symbol_override_can_tighten_turtle_breakout_for_specific_coin(self):
+        engine = FactorEngine(
+            {
+                "strategy": {
+                    "enable_turtle_breakout_entry": True,
+                    "turtle_min_breakout_distance": 0.18,
+                    "turtle_max_breakout_distance": 1.00,
+                    "turtle_min_volume_ratio": 1.00,
+                    "turtle_min_rsi": 52.0,
+                    "turtle_max_rsi": 72.0,
+                    "symbol_overrides": {
+                        "BNB/USDT": {
+                            "turtle_min_breakout_distance": 0.60,
+                        }
+                    },
+                },
+                "trend": {"min_trend_slope": 0.0006},
+            }
+        )
+        common_raw = {
+            "breakout_distance": 0.45,
+            "trend_slope": 0.0012,
+            "volume_zscore": 0.40,
+            "realized_vol_short": 0.009,
+        }
+        btc_snapshot = engine.evaluate(
+            _feature_vector(symbol="BTC/USDT", rsi=58.0, volume_ratio=1.15, raw=common_raw)
+        )
+        bnb_snapshot = engine.evaluate(
+            _feature_vector(symbol="BNB/USDT", rsi=58.0, volume_ratio=1.15, raw=common_raw)
+        )
+
+        btc_obs = next(
+            item
+            for item in btc_snapshot.observations
+            if item.name == "turtle_breakout_entry"
+        )
+        bnb_obs = next(
+            item
+            for item in bnb_snapshot.observations
+            if item.name == "turtle_breakout_entry"
+        )
+
+        assert btc_obs.bias == FactorBias.BULLISH
+        assert bnb_obs.bias == FactorBias.NEUTRAL
+
+    def test_dynamic_entry_factor_weighting_penalizes_losing_symbol(self):
+        config = {
+            "strategy": {
+                "factor_weights": {
+                    "turtle_breakout_entry": 0.20,
+                    "grid_reversion_entry": 0.16,
+                },
+                "dynamic_entry_factor_weighting_enabled": True,
+                "dynamic_entry_factor_weight_targets": [
+                    "turtle_breakout_entry",
+                    "grid_reversion_entry",
+                ],
+                "dynamic_entry_factor_weight_floor": 0.55,
+                "dynamic_entry_factor_weight_ceiling": 1.10,
+                "dynamic_entry_factor_negative_scale": 10.0,
+                "dynamic_entry_factor_positive_scale": 4.0,
+                "bayesian_symbol_performance_enabled": True,
+                "symbol_performance_window": 8,
+                "symbol_performance_min_trades": 1,
+                "bayesian_symbol_prior_mean": 0.0,
+                "bayesian_symbol_prior_strength": 4.0,
+                "bayesian_symbol_observation_strength": 2.0,
+                "bayesian_symbol_uncertainty_penalty": 0.0,
+            }
+        }
+        engine = FactorEngine(config)
+        manager = BayesianSymbolPerformanceManager(config)
+        engine.set_performance_manager(manager)
+
+        base_turtle_weight = engine._factor_weight("SOL/USDT", "turtle_breakout_entry")
+        base_grid_weight = engine._factor_weight("SOL/USDT", "grid_reversion_entry")
+
+        manager.record_trade("SOL/USDT", -0.05)
+        manager.record_trade("SOL/USDT", -0.04)
+        manager.record_trade("SOL/USDT", -0.03)
+
+        penalized_turtle_weight = engine._factor_weight(
+            "SOL/USDT", "turtle_breakout_entry"
+        )
+        penalized_grid_weight = engine._factor_weight(
+            "SOL/USDT", "grid_reversion_entry"
+        )
+
+        assert penalized_turtle_weight < base_turtle_weight
+        assert penalized_grid_weight < base_grid_weight
+        assert penalized_turtle_weight >= 0.20 * 0.55
+        assert penalized_grid_weight >= 0.16 * 0.55
+
+    def test_onchain_factors_turn_bullish_when_value_and_activity_improve(self):
+        engine = FactorEngine(
+            {
+                "strategy": {
+                    "factor_weights": {
+                        "onchain_mvrv_state": 0.10,
+                        "onchain_activity_state": 0.10,
+                        "onchain_nvt_proxy": 0.08,
+                        "onchain_ecosystem_state": 0.08,
+                    },
+                    "onchain_mvrv_bullish_max": 1.05,
+                    "onchain_mvrv_bearish_min": 1.80,
+                    "onchain_activity_lookback": 6,
+                    "onchain_activity_bullish_growth": 0.05,
+                    "onchain_activity_bearish_growth": -0.08,
+                    "onchain_nvt_proxy_lookback": 6,
+                    "onchain_nvt_proxy_bullish_zscore": -0.30,
+                    "onchain_nvt_proxy_bearish_zscore": 0.80,
+                    "onchain_ecosystem_lookback": 6,
+                    "onchain_ecosystem_bullish_growth": 0.10,
+                    "onchain_ecosystem_bearish_growth": -0.10,
+                }
+            }
+        )
+        snapshot = engine.evaluate(
+            _feature_vector(),
+            supplementary={
+                "onchain_mvrv_ratio": 0.92,
+                "onchain_active_addresses": 130.0,
+                "onchain_tx_count": 240.0,
+                "onchain_market_cap_usd": 1000.0,
+                "onchain_nvt_proxy": 4.2,
+                "onchain_chain_tvl_usd": 1450.0,
+                "onchain_chain_stablecoin_supply_usd": 1200.0,
+                "onchain_chain_dex_volume_usd": 950.0,
+                "onchain_chain_fees_usd": 62.0,
+                "has_onchain_mvrv_ratio": True,
+                "has_onchain_active_addresses": True,
+                "has_onchain_tx_count": True,
+                "has_onchain_market_cap_usd": True,
+                "has_onchain_nvt_proxy": True,
+                "has_onchain_chain_tvl_usd": True,
+                "has_onchain_chain_stablecoin_supply_usd": True,
+                "has_onchain_chain_dex_volume_usd": True,
+                "has_onchain_chain_fees_usd": True,
+            },
+            supplementary_history={
+                "onchain_mvrv_ratio": [1.10, 1.08, 1.04, 1.01, 0.97, 0.92],
+                "onchain_active_addresses": [100.0, 102.0, 104.0, 108.0, 115.0, 130.0],
+                "onchain_tx_count": [180.0, 185.0, 190.0, 200.0, 215.0, 240.0],
+                "onchain_nvt_proxy": [6.8, 6.4, 6.0, 5.6, 5.0, 4.2],
+                "onchain_chain_tvl_usd": [1000.0, 1040.0, 1090.0, 1180.0, 1300.0, 1450.0],
+                "onchain_chain_stablecoin_supply_usd": [
+                    900.0,
+                    930.0,
+                    970.0,
+                    1030.0,
+                    1110.0,
+                    1200.0,
+                ],
+                "onchain_chain_dex_volume_usd": [650.0, 680.0, 710.0, 760.0, 860.0, 950.0],
+                "onchain_chain_fees_usd": [40.0, 42.0, 44.0, 48.0, 54.0, 62.0],
+            },
+        )
+        mvrv = next(
+            item for item in snapshot.observations if item.name == "onchain_mvrv_state"
+        )
+        activity = next(
+            item
+            for item in snapshot.observations
+            if item.name == "onchain_activity_state"
+        )
+        nvt = next(
+            item for item in snapshot.observations if item.name == "onchain_nvt_proxy"
+        )
+        ecosystem = next(
+            item
+            for item in snapshot.observations
+            if item.name == "onchain_ecosystem_state"
+        )
+
+        assert mvrv.bias == FactorBias.BULLISH
+        assert activity.bias == FactorBias.BULLISH
+        assert nvt.bias == FactorBias.BULLISH
+        assert ecosystem.bias == FactorBias.BULLISH

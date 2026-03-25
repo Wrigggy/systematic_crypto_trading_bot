@@ -74,6 +74,12 @@ class StrategyLogic:
 
         # Optional TradeTracker for adaptive Kelly (injected after init)
         self._trade_tracker = None
+        self._recent_trade_returns: deque = deque(
+            maxlen=max(1, int(strategy_cfg.get("symbol_performance_window", 8)))
+        )
+        self._symbol_performance_min_trades: int = max(
+            1, int(strategy_cfg.get("symbol_performance_min_trades", 3))
+        )
 
         # Alpha decay
         self._decay_half_life_s: float = alpha_cfg.get("decay_half_life_s", 999999)
@@ -87,6 +93,9 @@ class StrategyLogic:
         )
         self._exit_horizon_minutes: int = strategy_cfg.get(
             "exit_horizon_minutes", 30
+        )
+        self._post_exit_cooldown_minutes: int = max(
+            0, int(strategy_cfg.get("post_exit_cooldown_minutes", 0))
         )
         self._base_stop_loss_pct: float = strategy_cfg.get("base_stop_loss_pct", 0.012)
         self._take_profit_1_rr: float = strategy_cfg.get("take_profit_1_rr", 1.2)
@@ -105,6 +114,9 @@ class StrategyLogic:
         self._min_supporting_categories: int = strategy_cfg.get(
             "min_supporting_categories", 2
         )
+        self._allow_onchain_to_count_toward_structure: bool = bool(
+            strategy_cfg.get("allow_onchain_to_count_toward_structure", False)
+        )
         self._require_trend_alignment: bool = strategy_cfg.get(
             "require_trend_alignment", True
         )
@@ -122,6 +134,9 @@ class StrategyLogic:
         self._entry_filled_qty: float = 0.0
         self._exit_filled_qty: float = 0.0
         self._exit_fill_notional: float = 0.0
+        self._cooldown_until: Optional[datetime] = None
+        self._volatility_manager = None
+        self._performance_manager = None
 
     @property
     def state(self) -> StrategyState:
@@ -144,6 +159,8 @@ class StrategyLogic:
         Returns an Order if action is needed, None otherwise.
         """
         if self._state == StrategyState.FLAT:
+            if self._cooldown_active(signal.timestamp):
+                return None
             # Use decayed alpha for threshold comparison (disabled if half_life >= 999999)
             if self._decay_half_life_s < 999999:
                 effective_alpha = signal.decayed_alpha(
@@ -250,6 +267,11 @@ class StrategyLogic:
                 )
 
         if self._state == StrategyState.FLAT:
+            if self._cooldown_active(factors.timestamp):
+                reasoning.append(
+                    f"Post-exit cooldown active until {self._format_timestamp(self._cooldown_until)}"
+                )
+                return None
             regime_multiplier = self._entry_size_multiplier(factors.regime)
             structure_ok = self._entry_structure_ok(factors)
             self._factor_history.append(
@@ -556,6 +578,13 @@ class StrategyLogic:
                 )
             else:
                 avg_exit_price = self._average_exit_price()
+                closed_trade_return = self._compute_closed_trade_return(avg_exit_price)
+                if closed_trade_return is not None:
+                    self._recent_trade_returns.append(closed_trade_return)
+                    if self._performance_manager is not None:
+                        self._performance_manager.record_trade(
+                            self._symbol, closed_trade_return
+                        )
                 if (
                     self._trade_tracker is not None
                     and self._entry_price > 0
@@ -563,6 +592,7 @@ class StrategyLogic:
                 ):
                     self._trade_tracker.record_trade(self._entry_price, avg_exit_price)
                 self._state = StrategyState.FLAT
+                self._set_post_exit_cooldown(order)
                 self._entry_price = 0.0
                 self._entry_filled_qty = 0.0
                 self._reset_exit_fill_tracking()
@@ -604,9 +634,58 @@ class StrategyLogic:
         self._entry_filled_qty = 0.0
         self._reset_exit_fill_tracking()
 
+    def mark_exit_pending(self) -> None:
+        """Keep the strategy in exit mode until the sell order resolves."""
+        if self._state == StrategyState.FLAT:
+            return
+        self._reset_exit_fill_tracking()
+        self._state = StrategyState.EXIT_PENDING
+
+    def _cooldown_active(self, timestamp: Optional[datetime]) -> bool:
+        if self._cooldown_until is None:
+            return False
+        if timestamp is None:
+            return datetime.utcnow() < self._cooldown_until
+        return timestamp < self._cooldown_until
+
+    def _set_post_exit_cooldown(self, order: Order) -> None:
+        if self._post_exit_cooldown_minutes <= 0:
+            self._cooldown_until = None
+            return
+        anchor = order.filled_at or datetime.utcnow()
+        self._cooldown_until = anchor + timedelta(
+            minutes=self._post_exit_cooldown_minutes
+        )
+
+    @staticmethod
+    def _format_timestamp(value: Optional[datetime]) -> str:
+        if value is None:
+            return "n/a"
+        return value.isoformat(timespec="minutes")
+
     def set_trade_tracker(self, tracker) -> None:
         """Inject TradeTracker for adaptive Kelly sizing."""
         self._trade_tracker = tracker
+
+    def set_volatility_manager(self, manager) -> None:
+        """Inject shared Bayesian volatility state for dynamic sizing."""
+        self._volatility_manager = manager
+
+    def set_performance_manager(self, manager) -> None:
+        """Inject shared Bayesian symbol-performance state."""
+        self._performance_manager = manager
+
+    @property
+    def recent_trade_count(self) -> int:
+        return len(self._recent_trade_returns)
+
+    def symbol_performance_score(self) -> float:
+        if len(self._recent_trade_returns) < self._symbol_performance_min_trades:
+            return 0.0
+        returns = list(self._recent_trade_returns)
+        mean_return = sum(returns) / len(returns)
+        win_rate = sum(1 for value in returns if value > 0) / len(returns)
+        return (0.7 * mean_return) + (0.3 * (win_rate - 0.5))
 
     def _compute_buy_quantity(
         self, portfolio: PortfolioSnapshot, current_price: float, alpha_score: float
@@ -656,17 +735,31 @@ class StrategyLogic:
 
         regime_multiplier = self._entry_size_multiplier(regime)
         volatility_multiplier = self._volatility_size_multiplier(realized_volatility)
-        position_pct = raw_position_pct * regime_multiplier * volatility_multiplier
+        bayes_profile = (
+            self._volatility_manager.profile(self._symbol, realized_volatility)
+            if self._volatility_manager is not None
+            else None
+        )
+        bayes_multiplier = (
+            bayes_profile["size_multiplier"] if bayes_profile is not None else 1.0
+        )
+        position_pct = (
+            raw_position_pct
+            * regime_multiplier
+            * volatility_multiplier
+            * bayes_multiplier
+        )
 
         logger.info(
             "[%s] Half-Kelly sizing: raw_kelly=%.4f, conviction_intensity=%.4f, "
-            "raw_position_pct=%.4f, regime_mult=%.2f, vol_mult=%.2f, position_pct=%.4f",
+            "raw_position_pct=%.4f, regime_mult=%.2f, vol_mult=%.2f, bayes_mult=%.2f, position_pct=%.4f",
             self._symbol,
             raw_kelly,
             conviction_intensity,
             raw_position_pct,
             regime_multiplier,
             volatility_multiplier,
+            bayes_multiplier,
             position_pct,
         )
 
@@ -686,6 +779,8 @@ class StrategyLogic:
 
     def _entry_structure_ok(self, factors: FactorSnapshot) -> bool:
         bullish_obs = [obs for obs in factors.observations if obs.bias == FactorBias.BULLISH]
+        if not self._allow_onchain_to_count_toward_structure:
+            bullish_obs = [obs for obs in bullish_obs if obs.category != "onchain"]
         if len(bullish_obs) < self._min_supporting_factors:
             return False
         categories = {obs.category for obs in bullish_obs}
@@ -753,6 +848,11 @@ class StrategyLogic:
     def _reset_exit_fill_tracking(self) -> None:
         self._exit_filled_qty = 0.0
         self._exit_fill_notional = 0.0
+
+    def _compute_closed_trade_return(self, avg_exit_price: float) -> Optional[float]:
+        if self._entry_price <= 0 or avg_exit_price <= 0:
+            return None
+        return (avg_exit_price - self._entry_price) / self._entry_price
 
     @staticmethod
     def _format_horizon(minutes: int) -> str:
