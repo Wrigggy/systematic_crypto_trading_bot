@@ -89,6 +89,60 @@ class Signal(BaseModel):
         return self.alpha_score * decay
 
 
+class Bias(str, Enum):
+    BULLISH = "BULLISH"
+    BEARISH = "BEARISH"
+    NEUTRAL = "NEUTRAL"
+
+
+class Direction(str, Enum):
+    LONG = "LONG"
+    FLAT = "FLAT"
+    EXIT = "EXIT"
+
+
+class FactorObservation(BaseModel):
+    """Output of a single alpha evaluation for one symbol."""
+    name: str
+    symbol: str
+    bias: Bias
+    strength: float  # [0.0, 1.0]
+    timestamp: datetime
+    thesis: str = ""
+
+    def model_post_init(self, __context) -> None:
+        object.__setattr__(self, "strength", max(0.0, min(1.0, self.strength)))
+
+
+class FactorSnapshot(BaseModel):
+    """Aggregated signal across all alphas for one symbol."""
+    symbol: str
+    timestamp: datetime
+    observations: List[FactorObservation] = Field(default_factory=list)
+    entry_score: float = 0.0
+    exit_score: float = 0.0
+    confidence: float = 0.0
+
+
+class StrategyIntent(BaseModel):
+    """What the strategy wants to do, before sizing/risk."""
+    symbol: str
+    direction: Direction
+    target_weight: float = 0.0
+    thesis: str = ""
+    timestamp: datetime = Field(default_factory=datetime.utcnow)
+
+
+class TradeInstruction(BaseModel):
+    """Sized, concrete order to submit. Output of optimizer."""
+    symbol: str
+    side: Side
+    quantity: float
+    order_type: OrderType
+    limit_price: Optional[float] = None
+    timestamp: datetime = Field(default_factory=datetime.utcnow)
+
+
 class Order(BaseModel):
     order_id: str = Field(default_factory=lambda: str(uuid.uuid4())[:12])
     symbol: str

@@ -1,0 +1,21 @@
+{
+  "alpha_id": "lstm_btc_v1",
+  "version": "1.0.0",
+  "type": "model",
+  "description": "Example: LSTM model alpha (requires model_inference plugin). Not loaded by default.",
+  "compute": {
+    "checkpoint": "artifacts/models/lstm_btc_v1.onnx",
+    "input_features": ["rsi", "ema_fast", "ema_slow", "atr", "momentum", "volatility", "order_book_imbalance", "volume_ratio", "funding_rate", "taker_ratio"],
+    "sequence_length": 240
+  },
+  "normalization": {
+    "method": "rolling_zscore",
+    "lookback": 20
+  },
+  "weight_hint": 0.20,
+  "horizon": "intraday",
+  "meta": {
+    "author": "lstm_trainer",
+    "source_repo": "trading_competition"
+  }
+}

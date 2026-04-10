@@ -91,6 +91,20 @@ features:
   volatility_window: 20
   momentum_window: 10
 
+alphas:
+  directory: alphas/builtin
+  normalization_default: rolling_zscore
+  normalization_lookback: 20
+  signal:
+    noise_threshold: 0.3
+    max_strength_z: 3.0
+
+optimizer:
+  mode: score_tilted
+  max_positions: 2
+  temperature: 0.8
+  max_single_weight: 0.35
+
 alpha:
   engine: "rule_based"      # "rule_based" | "lstm" | "ensemble"
   entry_threshold: 0.6

@@ -76,7 +76,7 @@ class TestMultiTFFilter:
 
     def test_filter_with_no_data(self):
         from features.extractor import FeatureExtractor
-        from models.inference import AlphaEngine
+        from plugins.model_inference.evaluator import AlphaEngine
         from tests.conftest import make_candle_series
 
         config = {"alpha": {"engine": "rule_based"}, "features": {}}
@@ -89,7 +89,7 @@ class TestMultiTFFilter:
         assert -1.0 <= signal.alpha_score <= 1.0
 
     def test_bullish_filter_boosts(self):
-        from models.inference import AlphaEngine
+        from plugins.model_inference.evaluator import AlphaEngine
         from features.extractor import FeatureExtractor
         from tests.conftest import make_candle_series
 

@@ -27,12 +27,18 @@ from data.connector import WSConnector, BinanceSupplementaryFeed, prefetch_candl
 from data.sim_feed import SimulatedFeed
 from execution.executor import LiveExecutor
 from execution.order_manager import OrderManager
-from execution.roostoo_executor import RoostooExecutor
 from execution.sim_executor import SimExecutor
 from execution.trade_logger import TradeLogger
 from features.extractor import FeatureExtractor
-from models.inference import AlphaEngine
-from models.model_wrapper import ModelWrapper
+from alpha.registry import AlphaRegistry
+from strategy.optimizer import PortfolioOptimizer
+
+try:
+    from plugins.model_inference.evaluator import AlphaEngine
+    from plugins.model_inference.model_wrapper import ModelWrapper
+except ImportError:
+    AlphaEngine = None
+    ModelWrapper = None
 from risk.risk_shield import RiskShield
 from risk.tracker import PortfolioTracker
 from data.resampler import CandleResampler, MultiResampler
@@ -208,6 +214,7 @@ async def main(config: dict) -> None:
     if mode == "paper":
         executor = SimExecutor(paper_cfg, buffer)
     elif mode == "roostoo":
+        from plugins.roostoo.executor import RoostooExecutor
         _validate_roostoo_config(config)
         roostoo_cfg = config.get("roostoo", {})
         roostoo_exec = RoostooExecutor(roostoo_cfg)
@@ -288,56 +295,22 @@ async def main(config: dict) -> None:
             multi_resampler.primary_minutes,
         )
 
-    # 10c. ICIR tracker (optional, for per-symbol adaptive weights)
-    icir_tracker = None
-    icir_prior_path = alpha_cfg.get("icir_prior_path", "")
-    if alpha_cfg.get("icir_window"):
-        from models.icir_tracker import BayesianICIRTracker
-        import json
+    alpha_engine = AlphaEngine(config, extractor, model) if AlphaEngine is not None else None
 
-        prior_weights = {}
-        if icir_prior_path and Path(icir_prior_path).exists():
-            with open(icir_prior_path) as f:
-                prior_weights = json.load(f)
-            logger.info(
-                "Loaded ICIR priors for %d symbols from %s",
-                len(prior_weights),
-                icir_prior_path,
-            )
+    # Alpha registry (new)
+    alphas_cfg = config.get("alphas", {})
+    alpha_dir = Path(alphas_cfg.get("directory", "alphas/builtin"))
+    alpha_registry = AlphaRegistry(alpha_dir=alpha_dir, config=config)
+    logger.info("Loaded %d alphas from %s", len(alpha_registry.alphas), alpha_dir)
 
-        icir_tracker = BayesianICIRTracker(
-            prior_weights=prior_weights,
-            n_factors=4,
-            window=alpha_cfg.get("icir_window", 100),
-            min_samples=alpha_cfg.get("icir_min_samples", 30),
-            min_lambda=alpha_cfg.get("icir_min_lambda", 0.3),
-            tau=alpha_cfg.get("icir_tau", 50.0),
-        )
-        logger.info(
-            "ICIR tracker enabled: window=%d, min_samples=%d, min_lambda=%.2f",
-            alpha_cfg.get("icir_window", 100),
-            alpha_cfg.get("icir_min_samples", 30),
-            alpha_cfg.get("icir_min_lambda", 0.3),
-        )
-
-    # 10d. Trade tracker for adaptive Kelly
-    trade_tracker = None
-    if config.get("strategy", {}).get("adaptive_kelly", False):
-        from strategy.trade_tracker import TradeTracker
-
-        strategy_cfg = config.get("strategy", {})
-        trade_tracker = TradeTracker(
-            window=strategy_cfg.get("kelly_window", 50),
-            min_trades=strategy_cfg.get("kelly_min_trades", 10),
-            prior_win_rate=strategy_cfg.get("estimated_win_rate", 0.55),
-            prior_payoff=strategy_cfg.get("estimated_payoff", 1.5),
-        )
-        logger.info(
-            "Adaptive Kelly sizing enabled (window=%d)",
-            strategy_cfg.get("kelly_window", 50),
-        )
-
-    alpha_engine = AlphaEngine(config, extractor, model, icir_tracker=icir_tracker)
+    # Portfolio optimizer (new)
+    opt_cfg = config.get("optimizer", {})
+    optimizer = PortfolioOptimizer(
+        mode=opt_cfg.get("mode", "score_tilted"),
+        max_positions=opt_cfg.get("max_positions", 2),
+        temperature=opt_cfg.get("temperature", 0.8),
+        max_single_weight=opt_cfg.get("max_single_weight", 0.35),
+    )
 
     # 11. Strategy monitor (orchestrator)
     monitor = StrategyMonitor(
@@ -350,9 +323,9 @@ async def main(config: dict) -> None:
         order_manager=order_manager,
         resampler=resampler,
         multi_resampler=multi_resampler,
-        trade_tracker=trade_tracker,
-        icir_tracker=icir_tracker,
         executor=executor,
+        alpha_registry=alpha_registry,
+        optimizer=optimizer,
     )
 
     # 11b. Position recovery on restart (Roostoo mode only)
@@ -531,6 +504,9 @@ if __name__ == "__main__":
         default=None,
         help="Override alpha engine: rule_based, lstm, or ensemble",
     )
+    parser.add_argument(
+        "--alphas", type=str, default=None, help="Path to alpha JSON directory"
+    )
     args = parser.parse_args()
 
     # Load .env file if present (so credentials work without shell scripts)
@@ -548,6 +524,8 @@ if __name__ == "__main__":
         config["mode"] = args.mode
     if args.engine:
         config.setdefault("alpha", {})["engine"] = args.engine
+    if args.alphas:
+        config.setdefault("alphas", {})["directory"] = args.alphas
 
     _apply_env_overrides(config)
     setup_logging(config.get("mode", "paper"))

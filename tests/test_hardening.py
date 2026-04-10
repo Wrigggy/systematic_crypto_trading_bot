@@ -78,7 +78,7 @@ class TestMonitorExceptionHandler:
     async def test_monitor_continues_after_error(self, default_config):
         from strategy.monitor import StrategyMonitor
         from features.extractor import FeatureExtractor
-        from models.inference import AlphaEngine
+        from plugins.model_inference.evaluator import AlphaEngine
 
         buffer = LiveBuffer()
         extractor = FeatureExtractor(default_config.get("features", {}))
@@ -182,7 +182,7 @@ class TestNaNPropagation:
     """Fix 5: NaN from alpha engine defaults to 0.0."""
 
     def test_nan_alpha_defaults_to_zero(self, default_config):
-        from models.inference import AlphaEngine
+        from plugins.model_inference.evaluator import AlphaEngine
         from features.extractor import FeatureExtractor
 
         extractor = FeatureExtractor(default_config.get("features", {}))
@@ -199,7 +199,7 @@ class TestNaNPropagation:
         assert signal.alpha_score == 0.0
 
     def test_inf_alpha_defaults_to_zero(self, default_config):
-        from models.inference import AlphaEngine
+        from plugins.model_inference.evaluator import AlphaEngine
         from features.extractor import FeatureExtractor
 
         extractor = FeatureExtractor(default_config.get("features", {}))
@@ -430,7 +430,7 @@ class TestDayBoundaryReset:
     async def test_day_boundary_detection(self, default_config):
         from strategy.monitor import StrategyMonitor
         from features.extractor import FeatureExtractor
-        from models.inference import AlphaEngine
+        from plugins.model_inference.evaluator import AlphaEngine
 
         buffer = LiveBuffer()
         extractor = FeatureExtractor(default_config.get("features", {}))

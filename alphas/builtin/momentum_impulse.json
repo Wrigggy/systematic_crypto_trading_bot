@@ -1,0 +1,21 @@
+{
+  "alpha_id": "momentum_impulse",
+  "version": "1.0.0",
+  "type": "expression_tree",
+  "description": "Short-term price momentum weighted by volume spike. Captures momentum bursts confirmed by unusual trading activity.",
+  "expression": "Mul(Delta($close, 10), Div($volume, Mean($volume, 20)))",
+  "normalization": {
+    "method": "rolling_zscore",
+    "lookback": 20
+  },
+  "validation": {
+    "ic": 0.038,
+    "icir": 0.55
+  },
+  "weight_hint": 0.30,
+  "horizon": "intraday",
+  "meta": {
+    "author": "manual",
+    "source_repo": "systematic_crypto_trading_bot"
+  }
+}

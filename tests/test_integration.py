@@ -12,7 +12,7 @@ from data.buffer import LiveBuffer
 from execution.order_manager import OrderManager
 from execution.sim_executor import SimExecutor
 from features.extractor import FeatureExtractor
-from models.inference import AlphaEngine
+from plugins.model_inference.evaluator import AlphaEngine
 from risk.risk_shield import RiskShield
 from risk.tracker import PortfolioTracker
 from strategy.monitor import StrategyMonitor
@@ -184,80 +184,12 @@ class TestRiskIntegration:
         assert snap.nav > 0
 
 
-class TestSyntheticDataGeneration:
-    """Test the synthetic data generation for training."""
-
-    def test_generate_synthetic_ohlcv(self):
-        from models.train import generate_synthetic_ohlcv
-
-        candles = generate_synthetic_ohlcv("BTC/USDT", n_candles=100, seed=42)
-        assert len(candles) == 100
-        assert all(c.symbol == "BTC/USDT" for c in candles)
-        assert all(c.is_closed for c in candles)
-        assert all(c.high >= c.low for c in candles)
-        assert all(c.volume > 0 for c in candles)
-
-    def test_deterministic_with_seed(self):
-        from models.train import generate_synthetic_ohlcv
-
-        c1 = generate_synthetic_ohlcv("BTC/USDT", n_candles=50, seed=123)
-        c2 = generate_synthetic_ohlcv("BTC/USDT", n_candles=50, seed=123)
-        assert [c.close for c in c1] == [c.close for c in c2]
-
-    def test_different_seeds_differ(self):
-        from models.train import generate_synthetic_ohlcv
-
-        c1 = generate_synthetic_ohlcv("BTC/USDT", n_candles=50, seed=1)
-        c2 = generate_synthetic_ohlcv("BTC/USDT", n_candles=50, seed=2)
-        assert [c.close for c in c1] != [c.close for c in c2]
-
-    def test_build_dataset_from_synthetic(self):
-        from models.train import generate_synthetic_ohlcv, build_dataset
-
-        candles = generate_synthetic_ohlcv("BTC/USDT", n_candles=200, seed=42)
-        extractor = FeatureExtractor(
-            {
-                "rsi_period": 14,
-                "ema_fast": 12,
-                "ema_slow": 26,
-                "atr_period": 14,
-                "volatility_window": 20,
-                "momentum_window": 10,
-            }
-        )
-        X, y = build_dataset(candles, extractor, seq_len=30, forward_window=5)
-        assert X.shape[1] == 30  # seq_len
-        assert X.shape[2] == 10  # n_features
-        assert y.shape[1] == 1
-        assert len(X) == len(y)
-        assert len(X) > 0
-
-
 class TestModelWrapper:
-    """Test ONNX and PyTorch model loading/inference."""
-
-    def test_pytorch_load_and_predict(self):
-        import torch
-        from models.lstm_model import LSTMAlphaModel
-        from models.model_wrapper import ModelWrapper
-        import numpy as np
-
-        # Create a temp model
-        model = LSTMAlphaModel(n_features=6)
-        pt_path = "/tmp/test_model.pt"
-        torch.save(model.state_dict(), pt_path)
-
-        wrapper = ModelWrapper(pt_path, n_features=6)
-        wrapper.load()
-        assert wrapper.is_loaded
-
-        seq = np.random.randn(30, 6).astype(np.float32)
-        score = wrapper.predict(seq)
-        assert -1.0 <= score <= 1.0
+    """Test ONNX model loading/inference."""
 
     def test_onnx_load_and_predict(self):
         from pathlib import Path
-        from models.model_wrapper import ModelWrapper
+        from plugins.model_inference.model_wrapper import ModelWrapper
         import numpy as np
 
         onnx_path = "artifacts/model.onnx"

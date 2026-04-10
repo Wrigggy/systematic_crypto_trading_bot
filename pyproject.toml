@@ -1,25 +1,25 @@
 [project]
-name = "trading-competition"
-version = "0.1.0"
-description = "Add your description here"
+name = "systematic-crypto-trading-bot"
+version = "0.2.0"
+description = "Factor-first crypto trading system with pluggable expression-tree alpha contract"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-    "aiohttp>=3.13.3",
     "ccxt>=4.5.43",
     "numpy>=2.2.6",
-    "onnxruntime>=1.19,<=1.23.2",
-    "onnxscript>=0.6.2",
     "pandas>=2.3.3",
     "pre-commit>=4.5.1",
     "pydantic>=2.12.5",
     "pyyaml>=6.0.3",
     "ruff>=0.15.6",
-    "torch>=2.10.0",
     "tqdm>=4.67.3",
-    "wandb>=0.25.1",
     "websockets>=16.0",
 ]
+
+[project.optional-dependencies]
+model = ["torch>=2.10.0", "onnxruntime>=1.19,<=1.23.2", "onnxscript>=0.6.2"]
+roostoo = ["aiohttp>=3.13.3"]
+dev = ["wandb>=0.25.1"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

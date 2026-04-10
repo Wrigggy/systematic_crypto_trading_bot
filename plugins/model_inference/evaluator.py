@@ -7,7 +7,7 @@ from typing import List, Optional
 
 from core.models import OHLCV, FeatureVector, Signal
 from features.extractor import FeatureExtractor
-from models.model_wrapper import ModelWrapper
+from plugins.model_inference.model_wrapper import ModelWrapper
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +26,6 @@ class AlphaEngine:
         config: dict,
         extractor: FeatureExtractor,
         model: Optional[ModelWrapper] = None,
-        icir_tracker=None,
     ):
         alpha_cfg = config.get("alpha", {})
         self._engine_type: str = alpha_cfg.get("engine", "rule_based")
@@ -36,10 +35,7 @@ class AlphaEngine:
         self._extractor = extractor
         self._model = model
 
-        # Optional ICIR tracker for per-symbol adaptive weights
-        self._icir = icir_tracker
-
-        # Default rule-based weights (used when no ICIR tracker)
+        # Default rule-based weights
         self._w_rsi = 0.3
         self._w_momentum = 0.3
         self._w_ema = 0.3
@@ -122,15 +118,10 @@ class AlphaEngine:
 
     def _rule_based_score(self, features: FeatureVector) -> float:
         """Composite alpha score from technical indicators."""
-        # Get per-symbol weights from ICIR tracker if available
-        if self._icir is not None:
-            weights = self._icir.get_weights(features.symbol)
-            w_rsi, w_momentum, w_ema, w_vol = weights
-        else:
-            w_rsi = self._w_rsi
-            w_momentum = self._w_momentum
-            w_ema = self._w_ema
-            w_vol = self._w_vol_penalty
+        w_rsi = self._w_rsi
+        w_momentum = self._w_momentum
+        w_ema = self._w_ema
+        w_vol = self._w_vol_penalty
 
         # RSI signal: (50 - RSI) / 50, so RSI=30 → +0.4, RSI=70 → -0.4
         rsi_signal = (50.0 - features.rsi) / 50.0
