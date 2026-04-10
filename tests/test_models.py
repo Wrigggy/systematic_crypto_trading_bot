@@ -112,3 +112,76 @@ class TestPortfolioSnapshot:
         assert snap.drawdown == 0.0
         assert snap.daily_pnl == 0.0
         assert len(snap.positions) == 0
+
+
+from core.models import FactorObservation, FactorSnapshot, StrategyIntent, TradeInstruction
+
+
+class TestFactorObservation:
+    def test_create_bullish(self):
+        obs = FactorObservation(
+            name="momentum_impulse",
+            symbol="BTC/USDT",
+            bias="BULLISH",
+            strength=0.8,
+            timestamp=datetime(2026, 1, 1),
+        )
+        assert obs.bias == "BULLISH"
+        assert 0.0 <= obs.strength <= 1.0
+
+    def test_strength_clamped(self):
+        obs = FactorObservation(
+            name="test",
+            symbol="BTC/USDT",
+            bias="NEUTRAL",
+            strength=1.5,
+            timestamp=datetime(2026, 1, 1),
+        )
+        assert obs.strength == 1.0
+
+
+class TestFactorSnapshot:
+    def test_aggregate_observations(self):
+        obs1 = FactorObservation(
+            name="alpha1", symbol="BTC/USDT", bias="BULLISH",
+            strength=0.8, timestamp=datetime(2026, 1, 1),
+        )
+        obs2 = FactorObservation(
+            name="alpha2", symbol="BTC/USDT", bias="BEARISH",
+            strength=0.3, timestamp=datetime(2026, 1, 1),
+        )
+        snap = FactorSnapshot(
+            symbol="BTC/USDT",
+            timestamp=datetime(2026, 1, 1),
+            observations=[obs1, obs2],
+            entry_score=0.5,
+            exit_score=-0.1,
+            confidence=0.7,
+        )
+        assert len(snap.observations) == 2
+        assert snap.entry_score == 0.5
+
+
+class TestStrategyIntent:
+    def test_create_long_intent(self):
+        intent = StrategyIntent(
+            symbol="BTC/USDT",
+            direction="LONG",
+            target_weight=0.35,
+            thesis="Momentum + volume aligned",
+            timestamp=datetime(2026, 1, 1),
+        )
+        assert intent.direction == "LONG"
+
+
+class TestTradeInstruction:
+    def test_create_instruction(self):
+        instr = TradeInstruction(
+            symbol="BTC/USDT",
+            side="BUY",
+            quantity=0.12,
+            order_type="LIMIT",
+            limit_price=65000.0,
+            timestamp=datetime(2026, 1, 1),
+        )
+        assert instr.quantity == 0.12
