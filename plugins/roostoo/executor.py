@@ -17,7 +17,7 @@ from typing import Any, Dict, Optional
 import aiohttp
 
 from core.models import Order, OrderStatus, OrderType, Side
-from data.roostoo_auth import RoostooAuth
+from plugins.roostoo.auth import RoostooAuth
 from execution.executor import BaseExecutor
 
 logger = logging.getLogger(__name__)

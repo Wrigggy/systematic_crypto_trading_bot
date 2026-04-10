@@ -11,7 +11,7 @@ from data.buffer import LiveBuffer
 from data.resampler import CandleResampler, MultiResampler
 from execution.order_manager import OrderManager
 from features.extractor import FeatureExtractor
-from models.inference import AlphaEngine
+from plugins.model_inference.evaluator import AlphaEngine
 from risk.risk_shield import RiskShield
 from risk.tracker import PortfolioTracker
 from strategy.logic import StrategyLogic

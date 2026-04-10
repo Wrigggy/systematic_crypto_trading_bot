@@ -7,7 +7,7 @@ from typing import List, Optional
 
 from core.models import OHLCV, FeatureVector, Signal
 from features.extractor import FeatureExtractor
-from models.model_wrapper import ModelWrapper
+from plugins.model_inference.model_wrapper import ModelWrapper
 
 logger = logging.getLogger(__name__)
 

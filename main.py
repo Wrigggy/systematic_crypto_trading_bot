@@ -27,14 +27,18 @@ from data.connector import WSConnector, BinanceSupplementaryFeed, prefetch_candl
 from data.sim_feed import SimulatedFeed
 from execution.executor import LiveExecutor
 from execution.order_manager import OrderManager
-from execution.roostoo_executor import RoostooExecutor
 from execution.sim_executor import SimExecutor
 from execution.trade_logger import TradeLogger
 from features.extractor import FeatureExtractor
 from alpha.registry import AlphaRegistry
-from models.inference import AlphaEngine
-from models.model_wrapper import ModelWrapper
 from strategy.optimizer import PortfolioOptimizer
+
+try:
+    from plugins.model_inference.evaluator import AlphaEngine
+    from plugins.model_inference.model_wrapper import ModelWrapper
+except ImportError:
+    AlphaEngine = None
+    ModelWrapper = None
 from risk.risk_shield import RiskShield
 from risk.tracker import PortfolioTracker
 from data.resampler import CandleResampler, MultiResampler
@@ -210,6 +214,7 @@ async def main(config: dict) -> None:
     if mode == "paper":
         executor = SimExecutor(paper_cfg, buffer)
     elif mode == "roostoo":
+        from plugins.roostoo.executor import RoostooExecutor
         _validate_roostoo_config(config)
         roostoo_cfg = config.get("roostoo", {})
         roostoo_exec = RoostooExecutor(roostoo_cfg)
