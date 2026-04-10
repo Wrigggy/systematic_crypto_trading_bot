@@ -1,7 +1,7 @@
 [project]
-name = "trading-competition"
-version = "0.1.0"
-description = "Add your description here"
+name = "systematic-crypto-trading-bot"
+version = "0.2.0"
+description = "Factor-first crypto trading system with pluggable expression-tree alpha contract"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
