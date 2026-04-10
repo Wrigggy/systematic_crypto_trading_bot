@@ -1,0 +1,21 @@
+{
+  "alpha_id": "volume_confirmation",
+  "version": "1.0.0",
+  "type": "expression_tree",
+  "description": "Volume ratio vs 20-bar average. High ratio confirms conviction behind price moves.",
+  "expression": "Sub(Div($volume, Mean($volume, 20)), 1.0)",
+  "normalization": {
+    "method": "rolling_zscore",
+    "lookback": 20
+  },
+  "validation": {
+    "ic": 0.025,
+    "icir": 0.40
+  },
+  "weight_hint": 0.20,
+  "horizon": "intraday",
+  "meta": {
+    "author": "manual",
+    "source_repo": "systematic_crypto_trading_bot"
+  }
+}

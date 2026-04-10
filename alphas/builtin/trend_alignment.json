@@ -1,0 +1,21 @@
+{
+  "alpha_id": "trend_alignment",
+  "version": "1.0.0",
+  "type": "expression_tree",
+  "description": "EMA crossover: fast EMA above slow EMA indicates uptrend alignment. Normalized by price level.",
+  "expression": "Div(Sub(EMA($close, 12), EMA($close, 26)), EMA($close, 26))",
+  "normalization": {
+    "method": "rolling_zscore",
+    "lookback": 30
+  },
+  "validation": {
+    "ic": 0.042,
+    "icir": 0.60
+  },
+  "weight_hint": 0.30,
+  "horizon": "intraday",
+  "meta": {
+    "author": "manual",
+    "source_repo": "systematic_crypto_trading_bot"
+  }
+}

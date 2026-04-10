@@ -1,0 +1,21 @@
+{
+  "alpha_id": "mean_reversion",
+  "version": "1.0.0",
+  "type": "expression_tree",
+  "description": "Deviation from 20-bar mean, inverted. Captures short-term mean reversion when price overshoots.",
+  "expression": "Mul(Sub(Mean($close, 20), $close), Div(1.0, Std($close, 20)))",
+  "normalization": {
+    "method": "rolling_zscore",
+    "lookback": 30
+  },
+  "validation": {
+    "ic": 0.030,
+    "icir": 0.45
+  },
+  "weight_hint": 0.20,
+  "horizon": "intraday",
+  "meta": {
+    "author": "manual",
+    "source_repo": "systematic_crypto_trading_bot"
+  }
+}
