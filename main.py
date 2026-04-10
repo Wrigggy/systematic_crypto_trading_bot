@@ -31,8 +31,10 @@ from execution.roostoo_executor import RoostooExecutor
 from execution.sim_executor import SimExecutor
 from execution.trade_logger import TradeLogger
 from features.extractor import FeatureExtractor
+from alpha.registry import AlphaRegistry
 from models.inference import AlphaEngine
 from models.model_wrapper import ModelWrapper
+from strategy.optimizer import PortfolioOptimizer
 from risk.risk_shield import RiskShield
 from risk.tracker import PortfolioTracker
 from data.resampler import CandleResampler, MultiResampler
@@ -339,6 +341,21 @@ async def main(config: dict) -> None:
 
     alpha_engine = AlphaEngine(config, extractor, model, icir_tracker=icir_tracker)
 
+    # Alpha registry (new)
+    alphas_cfg = config.get("alphas", {})
+    alpha_dir = Path(alphas_cfg.get("directory", "alphas/builtin"))
+    alpha_registry = AlphaRegistry(alpha_dir=alpha_dir, config=config)
+    logger.info("Loaded %d alphas from %s", len(alpha_registry.alphas), alpha_dir)
+
+    # Portfolio optimizer (new)
+    opt_cfg = config.get("optimizer", {})
+    optimizer = PortfolioOptimizer(
+        mode=opt_cfg.get("mode", "score_tilted"),
+        max_positions=opt_cfg.get("max_positions", 2),
+        temperature=opt_cfg.get("temperature", 0.8),
+        max_single_weight=opt_cfg.get("max_single_weight", 0.35),
+    )
+
     # 11. Strategy monitor (orchestrator)
     monitor = StrategyMonitor(
         config=config,
@@ -353,6 +370,8 @@ async def main(config: dict) -> None:
         trade_tracker=trade_tracker,
         icir_tracker=icir_tracker,
         executor=executor,
+        alpha_registry=alpha_registry,
+        optimizer=optimizer,
     )
 
     # 11b. Position recovery on restart (Roostoo mode only)
@@ -531,6 +550,9 @@ if __name__ == "__main__":
         default=None,
         help="Override alpha engine: rule_based, lstm, or ensemble",
     )
+    parser.add_argument(
+        "--alphas", type=str, default=None, help="Path to alpha JSON directory"
+    )
     args = parser.parse_args()
 
     # Load .env file if present (so credentials work without shell scripts)
@@ -548,6 +570,8 @@ if __name__ == "__main__":
         config["mode"] = args.mode
     if args.engine:
         config.setdefault("alpha", {})["engine"] = args.engine
+    if args.alphas:
+        config.setdefault("alphas", {})["directory"] = args.alphas
 
     _apply_env_overrides(config)
     setup_logging(config.get("mode", "paper"))

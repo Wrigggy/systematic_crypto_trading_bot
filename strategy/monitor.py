@@ -5,6 +5,7 @@ import time
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Dict, Optional, Set
 
+from alpha.registry import AlphaRegistry
 from core.models import OHLCV, Order, OrderStatus, StrategyState
 from data.buffer import LiveBuffer
 from data.resampler import CandleResampler, MultiResampler
@@ -14,6 +15,7 @@ from models.inference import AlphaEngine
 from risk.risk_shield import RiskShield
 from risk.tracker import PortfolioTracker
 from strategy.logic import StrategyLogic
+from strategy.optimizer import PortfolioOptimizer
 
 if TYPE_CHECKING:
     from execution.base import BaseExecutor
@@ -33,15 +35,17 @@ class StrategyMonitor:
         config: dict,
         buffer: LiveBuffer,
         extractor: FeatureExtractor,
-        alpha_engine: AlphaEngine,
-        risk_shield: RiskShield,
-        tracker: PortfolioTracker,
-        order_manager: OrderManager,
+        alpha_engine: AlphaEngine = None,  # keep for backward compat, will be removed later
+        risk_shield: RiskShield = None,
+        tracker: PortfolioTracker = None,
+        order_manager: OrderManager = None,
         resampler: Optional[CandleResampler] = None,
         multi_resampler: Optional[MultiResampler] = None,
         trade_tracker=None,
         icir_tracker=None,
         executor: Optional["BaseExecutor"] = None,
+        alpha_registry: AlphaRegistry = None,  # NEW
+        optimizer: PortfolioOptimizer = None,  # NEW
     ):
         self._config = config
         self._buffer = buffer
@@ -56,6 +60,8 @@ class StrategyMonitor:
         self._trade_tracker = trade_tracker
         self._icir_tracker = icir_tracker
         self._executor = executor
+        self._alpha_registry = alpha_registry
+        self._optimizer = optimizer
 
         # Multi-TF timeframes to fetch for alpha filter
         alpha_cfg = config.get("alpha", {})
@@ -221,30 +227,44 @@ class StrategyMonitor:
                 ]
                 self._prev_prices[symbol] = candles[-1].close
 
-            supplementary_history = await self._buffer.get_supplementary_history(
-                symbol, self._alpha_engine._seq_len
-            )
+            # ── Alpha Scoring: registry path (new) or engine path (legacy) ──
+            if self._alpha_registry is not None:
+                snapshot = self._alpha_registry.evaluate(symbol, candles)
+                # Wrap FactorSnapshot into a Signal for backward compat with StrategyLogic
+                from core.models import Signal
+                signal = Signal(
+                    symbol=symbol,
+                    alpha_score=snapshot.entry_score,
+                    confidence=snapshot.confidence,
+                    timestamp=candles[-1].timestamp,
+                    source="alpha_registry",
+                )
+            else:
+                seq_len = getattr(self._alpha_engine, "_seq_len", 30)
+                supplementary_history = await self._buffer.get_supplementary_history(
+                    symbol, seq_len
+                )
 
-            # Fetch higher-TF candles for multi-TF filter
-            candles_15m = None
-            candles_1h = None
-            if self._multi_timeframes:
-                if 15 in self._multi_timeframes:
-                    candles_15m = await self._buffer.get_resampled_candles(
-                        symbol, 15, n=50
-                    )
-                if 60 in self._multi_timeframes:
-                    candles_1h = await self._buffer.get_resampled_candles(
-                        symbol, 60, n=50
-                    )
+                # Fetch higher-TF candles for multi-TF filter
+                candles_15m = None
+                candles_1h = None
+                if self._multi_timeframes:
+                    if 15 in self._multi_timeframes:
+                        candles_15m = await self._buffer.get_resampled_candles(
+                            symbol, 15, n=50
+                        )
+                    if 60 in self._multi_timeframes:
+                        candles_1h = await self._buffer.get_resampled_candles(
+                            symbol, 60, n=50
+                        )
 
-            signal = self._alpha_engine.score(
-                candles,
-                supplementary=supplementary,
-                supplementary_history=supplementary_history,
-                candles_15m=candles_15m,
-                candles_1h=candles_1h,
-            )
+                signal = self._alpha_engine.score(
+                    candles,
+                    supplementary=supplementary,
+                    supplementary_history=supplementary_history,
+                    candles_15m=candles_15m,
+                    candles_1h=candles_1h,
+                )
 
             # ── Strategy Decision ──
             snapshot = self._tracker.snapshot()
