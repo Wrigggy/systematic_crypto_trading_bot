@@ -109,4 +109,4 @@ uv run pytest --cov=. --cov-report=term-missing
 
 ## Acknowledgments
 
-This project is built upon [trading_competition](https://github.com/qunzhongwang/trading_competition) — a system originally developed with my teammate [@qunzhongwang](https://github.com/qunzhongwang) for the Roostoo trading competition. This fork restructures the architecture around a pluggable alpha contract and expression-tree evaluation pipeline.
+This project is built upon [trading_competition](https://github.com/qunzhongwang/trading_competition) — a system originally developed with my teammate [@qunzhongwang](https://github.com/qunzhongwang) and [@William147WU](https://github.com/William147WU) for the Roostoo trading competition. This fork restructures the architecture around a pluggable alpha contract and expression-tree evaluation pipeline.
