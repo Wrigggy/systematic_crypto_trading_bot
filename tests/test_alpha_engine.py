@@ -1,10 +1,10 @@
-"""Tests for models/inference.py — AlphaEngine rule-based scoring and signal generation."""
+"""Tests for AlphaEngine rule-based scoring and signal generation."""
 
 import pytest
 
 from core.models import FeatureVector, Signal
 from features.extractor import FeatureExtractor
-from models.inference import AlphaEngine
+from plugins.model_inference.evaluator import AlphaEngine
 from tests.conftest import make_candle_series
 
 

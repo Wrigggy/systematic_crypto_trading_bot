@@ -41,8 +41,6 @@ class StrategyMonitor:
         order_manager: OrderManager = None,
         resampler: Optional[CandleResampler] = None,
         multi_resampler: Optional[MultiResampler] = None,
-        trade_tracker=None,
-        icir_tracker=None,
         executor: Optional["BaseExecutor"] = None,
         alpha_registry: AlphaRegistry = None,  # NEW
         optimizer: PortfolioOptimizer = None,  # NEW
@@ -57,8 +55,6 @@ class StrategyMonitor:
         self._running = False
         self._resampler = resampler
         self._multi_resampler = multi_resampler
-        self._trade_tracker = trade_tracker
-        self._icir_tracker = icir_tracker
         self._executor = executor
         self._alpha_registry = alpha_registry
         self._optimizer = optimizer
@@ -72,11 +68,6 @@ class StrategyMonitor:
         self._strategies: Dict[str, StrategyLogic] = {
             sym: StrategyLogic(sym, config) for sym in symbols
         }
-
-        # Inject trade tracker into each strategy for adaptive Kelly
-        if trade_tracker is not None:
-            for strategy in self._strategies.values():
-                strategy.set_trade_tracker(trade_tracker)
 
         # Register fill callback for strategy logic
         self._order_manager.register_fill_callback(self._on_order_event)
@@ -95,10 +86,6 @@ class StrategyMonitor:
         # Time-based periodic logging (wall clock, not iteration count)
         self._last_status_log: float = 0.0
         self._status_log_interval: float = 60.0  # 1 minute
-
-        # ICIR tracking: store previous factors per symbol for online learning
-        self._prev_factors: Dict[str, list] = {}
-        self._prev_prices: Dict[str, float] = {}
 
     async def run(self) -> None:
         """Main event loop."""
@@ -197,35 +184,6 @@ class StrategyMonitor:
             # ── Alpha Scoring (only on completed resampled bars) ──
             if symbol not in alpha_ready:
                 continue
-
-            # ICIR online learning: record previous factors vs realized return
-            if self._icir_tracker is not None and symbol in self._prev_factors:
-                prev_price = self._prev_prices.get(symbol, 0.0)
-                if prev_price > 0:
-                    realized_return = (candles[-1].close - prev_price) / prev_price
-                    self._icir_tracker.record(
-                        symbol, self._prev_factors[symbol], realized_return
-                    )
-
-            # Store current factors for ICIR next iteration
-            if self._icir_tracker is not None:
-                self._prev_factors[symbol] = [
-                    (50.0 - features.rsi) / 50.0,
-                    max(-1.0, min(1.0, features.momentum * 20.0)),
-                    max(
-                        -1.0,
-                        min(
-                            1.0,
-                            (features.ema_fast - features.ema_slow)
-                            / features.ema_slow
-                            * 100.0,
-                        ),
-                    )
-                    if features.ema_slow > 0
-                    else 0.0,
-                    min(1.0, features.volatility * 50.0),
-                ]
-                self._prev_prices[symbol] = candles[-1].close
 
             # ── Alpha Scoring: registry path (new) or engine path (legacy) ──
             if self._alpha_registry is not None:

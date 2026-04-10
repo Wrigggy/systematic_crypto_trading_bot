@@ -295,56 +295,7 @@ async def main(config: dict) -> None:
             multi_resampler.primary_minutes,
         )
 
-    # 10c. ICIR tracker (optional, for per-symbol adaptive weights)
-    icir_tracker = None
-    icir_prior_path = alpha_cfg.get("icir_prior_path", "")
-    if alpha_cfg.get("icir_window"):
-        from models.icir_tracker import BayesianICIRTracker
-        import json
-
-        prior_weights = {}
-        if icir_prior_path and Path(icir_prior_path).exists():
-            with open(icir_prior_path) as f:
-                prior_weights = json.load(f)
-            logger.info(
-                "Loaded ICIR priors for %d symbols from %s",
-                len(prior_weights),
-                icir_prior_path,
-            )
-
-        icir_tracker = BayesianICIRTracker(
-            prior_weights=prior_weights,
-            n_factors=4,
-            window=alpha_cfg.get("icir_window", 100),
-            min_samples=alpha_cfg.get("icir_min_samples", 30),
-            min_lambda=alpha_cfg.get("icir_min_lambda", 0.3),
-            tau=alpha_cfg.get("icir_tau", 50.0),
-        )
-        logger.info(
-            "ICIR tracker enabled: window=%d, min_samples=%d, min_lambda=%.2f",
-            alpha_cfg.get("icir_window", 100),
-            alpha_cfg.get("icir_min_samples", 30),
-            alpha_cfg.get("icir_min_lambda", 0.3),
-        )
-
-    # 10d. Trade tracker for adaptive Kelly
-    trade_tracker = None
-    if config.get("strategy", {}).get("adaptive_kelly", False):
-        from strategy.trade_tracker import TradeTracker
-
-        strategy_cfg = config.get("strategy", {})
-        trade_tracker = TradeTracker(
-            window=strategy_cfg.get("kelly_window", 50),
-            min_trades=strategy_cfg.get("kelly_min_trades", 10),
-            prior_win_rate=strategy_cfg.get("estimated_win_rate", 0.55),
-            prior_payoff=strategy_cfg.get("estimated_payoff", 1.5),
-        )
-        logger.info(
-            "Adaptive Kelly sizing enabled (window=%d)",
-            strategy_cfg.get("kelly_window", 50),
-        )
-
-    alpha_engine = AlphaEngine(config, extractor, model, icir_tracker=icir_tracker)
+    alpha_engine = AlphaEngine(config, extractor, model) if AlphaEngine is not None else None
 
     # Alpha registry (new)
     alphas_cfg = config.get("alphas", {})
@@ -372,8 +323,6 @@ async def main(config: dict) -> None:
         order_manager=order_manager,
         resampler=resampler,
         multi_resampler=multi_resampler,
-        trade_tracker=trade_tracker,
-        icir_tracker=icir_tracker,
         executor=executor,
         alpha_registry=alpha_registry,
         optimizer=optimizer,
