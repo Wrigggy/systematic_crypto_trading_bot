@@ -58,6 +58,36 @@ uv run python main.py --alphas path/to/your/alphas/
 uv run python main.py --mode live
 ```
 
+### Demo (Interview)
+
+`config/demo.yaml` is a trimmed variant of `default.yaml` tuned for live walkthroughs:
+3 majors (BTC/ETH/SOL) instead of 60+ symbols, and `paper.speed_multiplier` lowered
+from 60× to 20× so the console pace tracks human reading speed. Everything else
+(features, alphas, risk, fees) is identical, so the methodology you describe matches
+what runs.
+
+```bash
+# Recommended launch (auto-activates .venv, tees to logs/trading_paper_<ts>.log)
+CONFIG=config/demo.yaml ./scripts/paper_trade.sh
+
+# Or the uv-native form
+uv run python main.py --config config/demo.yaml
+```
+
+Paper mode uses synthetic GBM candles — no API keys, no network needed.
+
+Approximate on-stage timings:
+
+| Stage | Wall-clock | What to narrate |
+|-------|------------|-----------------|
+| Startup (load 4 builtin alphas, init monitor/risk/executor) | ~5–10 s | Typed pipeline: `OHLCV → FeatureVector → AlphaSpec → FactorObservation → StrategyIntent → Order` |
+| First feature/alpha emissions (rolling indicators warm up) | ~30–60 s | Expression-tree evaluation + IC-weighted composite |
+| First `StrategyIntent` / sim order / fill | ~1–3 min | Half-Kelly sizing + 3-layer `RiskShield` (pre-trade, trailing stop, ATR stop) |
+| Trailing/ATR stop trigger, P&L drift visible | ~5 min | Circuit breaker (5% daily DD halt + liquidate) |
+
+A 2–3 min run shows the full alpha → intent → order → fill loop; budget ~5 min if
+you want to demo risk-side exits as well.
+
 ## Module Map
 
 | Module | Responsibility | Key File |

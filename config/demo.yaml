@@ -1,0 +1,97 @@
+mode: "paper"  # demo: paper trading with synthetic GBM data, no API keys
+
+# Trimmed to 3 majors so the console stays readable during a live demo.
+symbols:
+  - "BTC/USDT"
+  - "ETH/USDT"
+  - "SOL/USDT"
+
+exchange:
+  name: "binance"
+  ws_url: "wss://stream.binance.com:9443/ws"
+  api_key: ""
+  api_secret: ""
+
+roostoo:
+  base_url: "https://mock-api.roostoo.com"
+  api_key: ""
+  api_secret: ""
+
+data:
+  buffer_size: 1500
+  candle_interval: "1m"
+  tick_buffer_size: 5000
+
+features:
+  rsi_period: 14
+  ema_fast: 12
+  ema_slow: 26
+  atr_period: 14
+  volatility_window: 20
+  momentum_window: 10
+
+alphas:
+  directory: alphas/builtin
+  normalization_default: rolling_zscore
+  normalization_lookback: 20
+  signal:
+    noise_threshold: 0.3
+    max_strength_z: 3.0
+
+optimizer:
+  mode: score_tilted
+  max_positions: 2
+  temperature: 0.8
+  max_single_weight: 0.35
+
+alpha:
+  engine: "rule_based"
+  entry_threshold: 0.6
+  exit_threshold: -0.2
+  model_path: "artifacts/model.onnx"
+  seq_len: 240
+  resample_minutes: 5
+  multi_timeframes: [15, 60]
+  decay_half_life_s: 999999
+  icir_prior_path: "artifacts/icir_priors.json"
+  icir_window: 100
+  icir_min_samples: 30
+  icir_min_lambda: 0.3
+  icir_tau: 50.0
+
+strategy:
+  max_positions_per_symbol: 1
+  position_size_pct: 0.10
+  base_size_pct: 0.05
+  max_size_pct: 0.15
+  kelly_fraction: 0.5
+  estimated_win_rate: 0.55
+  estimated_payoff: 1.5
+  urgent_alpha_threshold: 0.85
+  confirmation_bars: 2
+  adaptive_kelly: false
+  kelly_window: 50
+  kelly_min_trades: 10
+  exit_tiers: []
+
+risk:
+  max_portfolio_exposure: 0.50
+  max_single_exposure: 0.15
+  trailing_stop_pct: 0.03
+  atr_stop_multiplier: 2.0
+  daily_drawdown_limit: 0.05
+  max_orders_per_minute: 20
+
+execution:
+  default_order_type: "market"
+  limit_offset_bps: 5
+  order_timeout_seconds: 30
+  fee_market_bps: 10
+  fee_limit_bps: 5
+
+paper:
+  initial_capital: 1000000.0
+  slippage_bps: 5
+  fee_bps: 10
+  replay_file: ""
+  speed_multiplier: 20.0   # demo: slowed from 60x to 20x so the console pace tracks human reading speed
