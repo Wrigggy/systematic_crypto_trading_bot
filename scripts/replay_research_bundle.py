@@ -89,12 +89,30 @@ def extra_metrics(result):
             orders[order['order_id']] = order
     filled = [o for o in orders.values() if o['filled_quantity'] > 0]
     holds = [e['holding_seconds'] for e in events if e['event'] == 'position_closed']
+    positions, closed_pnl = {}, []
+    for order in sorted(filled, key=lambda o: o['filled_at'] or ''):
+        symbol = order['symbol']
+        state = positions.setdefault(symbol, {'quantity': 0., 'net_cashflow': 0.})
+        sign = 1 if order['side'] == 'BUY' else -1
+        quantity = order['filled_quantity']
+        state['quantity'] += sign * quantity
+        state['net_cashflow'] -= sign * quantity * order['filled_price'] + (order['commission'] or 0.)
+        if abs(state['quantity']) <= 1e-8:
+            closed_pnl.append(state['net_cashflow'])
+            del positions[symbol]
+    gains = sum(max(v, 0) for v in closed_pnl)
+    losses = -sum(min(v, 0) for v in closed_pnl)
     return {'order_count': len(orders), 'filled_order_count': len(filled),
         'order_fill_fraction': len(filled) / len(orders) if orders else None,
         'order_status_counts': dict(Counter(o['status'] for o in orders.values())),
         'filled_roles': dict(Counter(o['liquidity'] for o in filled)),
         'exit_reasons': dict(Counter(e.get('reason', 'unknown') for e in events if e['event'] == 'position_closed')),
         'hold_quantiles_seconds': dict(zip(['p10', 'p50', 'p90'], np.quantile(holds, [.1, .5, .9]).tolist())) if holds else {},
+        'closed_trade_win_fraction': sum(v > 0 for v in closed_pnl) / len(closed_pnl) if closed_pnl else None,
+        'closed_trade_profit_factor': gains / losses if losses > 0 else None,
+        'closed_trade_net_pnl': sum(closed_pnl),
+        'closed_trade_net_pnl_values': closed_pnl,
+        'fee_total_usdt': sum(o['commission'] or 0 for o in filled),
         'candidate_count': sum(e['event'] == 'price_candidate' for e in events),
         'candidate_fusion_reasons': dict(Counter(e['fusion']['reason'] for e in events if e['event'] == 'price_candidate'))}
 

@@ -47,3 +47,18 @@ async def test_actual_exit_time_excludes_delayed_receipt():
     closed = next(e for e in hybrid.events if e['event'] == 'position_closed')
     assert closed['holding_seconds'] == 80
     assert closed['receipt_delay_seconds'] == 20
+
+
+def test_fast_score_moments_match_statistics_reference():
+    from statistics import mean, pstdev
+    from plugins.model_inference.forecasts import CausalScores
+    from tests.test_hybrid import packet
+    values = np.random.default_rng(111).normal(.00001, .00003, 200)
+    scores = CausalScores(window_seconds=3000, min_samples=10, min_span_seconds=600,
+                          max_gap_seconds=300)
+    for i, value in enumerate(values):
+        result = scores.update(packet(i * 60, float(value)))
+        if i >= 10:
+            past = values[max(0, i - 50):i].tolist()
+            expected = (value - mean(past)) / pstdev(past)
+            assert result['short'] == pytest.approx(expected, abs=1e-12)

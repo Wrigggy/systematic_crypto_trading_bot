@@ -7,7 +7,9 @@ import json
 import math
 from collections import deque
 from pathlib import Path
-from statistics import mean, pstdev
+from statistics import mean
+
+import numpy as np
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -115,10 +117,11 @@ class CausalScores:
                 len(history) >= self.minimum
                 and packet.as_of - history[0][0] >= self.span
             ):
-                values = [value for _, value in history]
-                std = pstdev(values)
+                values = np.fromiter((value for _, value in history), dtype=np.float64,
+                                     count=len(history))
+                std = float(values.std(ddof=0))
                 if std > 1e-12:
-                    result[head.name] = (head.prediction - mean(values)) / std
+                    result[head.name] = (head.prediction - float(values.mean())) / std
             history.append((packet.as_of, head.prediction))
         return result if len(result) == len(packet.heads) else None
 
