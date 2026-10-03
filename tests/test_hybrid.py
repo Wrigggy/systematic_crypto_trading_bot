@@ -1,6 +1,7 @@
 """Synthetic checks, not evidence of predictive or trading performance."""
 
 from datetime import datetime
+import gzip
 from unittest.mock import AsyncMock
 
 import pytest
@@ -9,7 +10,7 @@ from core.models import OHLCV, Order, OrderStatus, OrderType, Side
 from data.buffer import LiveBuffer
 from execution.order_manager import OrderManager
 from execution.sim_executor import SimExecutor
-from plugins.model_inference.forecasts import CausalScores, ForecastBook, ForecastPacket
+from plugins.model_inference.forecasts import CausalScores, ForecastBook, ForecastPacket, read_forecasts
 from risk.tracker import PortfolioTracker
 from strategy.fusion import SignalFusion
 from strategy.hybrid import Holding, HybridCoordinator, HourlyHistory
@@ -77,6 +78,21 @@ def test_normalization_excludes_current_and_is_asset_specific():
     with pytest.raises(ValueError, match="advance strictly"):
         scores.update(packet(120, 5))
     assert scores.update(packet(500, 5)) is None
+
+
+@pytest.mark.parametrize("compressed", [False, True])
+def test_read_exported_forecasts_plain_or_gzip(tmp_path, compressed):
+    path = tmp_path / ("forecasts.jsonl.gz" if compressed else "forecasts.jsonl")
+    expected = [packet(100, .001), packet(160, -.002)]
+    opener = gzip.open if compressed else open
+    with opener(path, "wt", encoding="utf-8") as stream:
+        for item in expected:
+            stream.write(item.model_dump_json() + "\n")
+    assert list(read_forecasts(path)) == expected
+    with opener(path, "wt", encoding="utf-8") as stream:
+        stream.write('{"schema_version": 999}\n')
+    with pytest.raises(ValueError, match="line 1"):
+        list(read_forecasts(path))
 
 
 @pytest.mark.parametrize(

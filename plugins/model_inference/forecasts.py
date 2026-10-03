@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gzip
 import json
 import math
 from collections import deque
@@ -220,7 +221,9 @@ class ForecastBook:
 
 def read_forecasts(path: str | Path):
     """Read versioned packets, not pickled model objects or executable artifacts."""
-    with Path(path).open() as stream:
+    path = Path(path)
+    opener = gzip.open if path.suffix == ".gz" else open
+    with opener(path, "rt", encoding="utf-8") as stream:
         for line_number, line in enumerate(stream, 1):
             if line.strip():
                 try:
