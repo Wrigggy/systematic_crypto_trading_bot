@@ -92,7 +92,7 @@ class TestHoldingState:
         order = logic.on_signal(signal, portfolio_with_position, current_price=100.0)
         assert order is not None
         assert order.side == Side.SELL
-        assert logic.state == StrategyState.FLAT
+        assert logic.state == StrategyState.EXIT_PENDING
 
     def test_no_sell_above_exit_threshold(
         self, logic, snap_100k, portfolio_with_position

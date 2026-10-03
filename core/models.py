@@ -20,6 +20,7 @@ class OrderType(str, Enum):
 
 
 class OrderStatus(str, Enum):
+    UNKNOWN = "UNKNOWN"  # Submission outcome is ambiguous; never resubmit blindly.
     PENDING = "PENDING"
     SUBMITTED = "SUBMITTED"
     FILLED = "FILLED"
@@ -32,6 +33,7 @@ class StrategyState(str, Enum):
     FLAT = "FLAT"
     LONG_PENDING = "LONG_PENDING"
     HOLDING = "HOLDING"
+    EXIT_PENDING = "EXIT_PENDING"
 
 
 class Tick(BaseModel):
@@ -153,8 +155,17 @@ class Order(BaseModel):
     status: OrderStatus = OrderStatus.PENDING
     created_at: datetime = Field(default_factory=datetime.utcnow)
     filled_at: Optional[datetime] = None
+    fill_time_source: Optional[str] = None
     filled_price: Optional[float] = None
     filled_quantity: float = 0.0
+    maker_preferred: bool = False
+    urgent: bool = False
+    reason: str = "signal"
+    liquidity: Optional[str] = None
+    commission: Optional[float] = None  # Cumulative fee in commission_asset.
+    commission_asset: Optional[str] = None
+    fee_bps: Optional[float] = None
+    exchange_acknowledged: bool = False
 
 
 class Position(BaseModel):

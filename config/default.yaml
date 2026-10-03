@@ -77,6 +77,9 @@ roostoo:
   base_url: "https://mock-api.roostoo.com"
   api_key: ""       # env var override: ROOSTOO_API_KEY
   api_secret: ""    # env var override: ROOSTOO_API_SECRET
+  max_requests_per_minute: 5  # Shared by quotes, balances, submit, query and cancel.
+  emergency_request_reserve: 1
+  maker_offset_bps: 0        # Join the venue bid/ask; round outward to valid ticks.
 
 data:
   buffer_size: 1500         # sliding window length (candles) — need 240×5=1200 raw 1-min candles min
@@ -128,7 +131,7 @@ strategy:
   kelly_fraction: 0.5       # half-Kelly multiplier
   estimated_win_rate: 0.55  # prior — calibrate from backtest results
   estimated_payoff: 1.5     # avg_win / avg_loss — calibrate from backtest results
-  urgent_alpha_threshold: 0.85  # alpha above this → market order
+  urgent_alpha_threshold: 0.85  # Legacy only; maker_preferred overrides signal urgency.
   confirmation_bars: 2      # require N consecutive bars above threshold
   adaptive_kelly: false     # enable adaptive Kelly sizing from trade history
   kelly_window: 50          # rolling window for adaptive Kelly
@@ -141,17 +144,20 @@ risk:
   trailing_stop_pct: 0.03
   atr_stop_multiplier: 2.0
   daily_drawdown_limit: 0.05
-  max_orders_per_minute: 20  # per-symbol rate limit (Binance allows 10/s but be conservative)
+  max_orders_per_minute: 5   # Separate order gate; executor also budgets all HTTP requests.
 
 execution:
-  default_order_type: "market"
-  limit_offset_bps: 5
-  order_timeout_seconds: 30
+  default_order_type: "limit"
+  maker_preferred: true
+  limit_offset_bps: 0       # Indicative paper quote; live Roostoo uses venue bid/ask.
+  order_timeout_seconds: 120  # Cancel at expiry; no blind market chase.
+  order_journal_path: "logs/pending_orders.json"
+  limit_penetration_bps: 2 # Paper sensitivity assumption, not verified engine behavior.
   fee_market_bps: 10        # 0.1% taker fee
   fee_limit_bps: 5          # 0.05% maker fee
 
 paper:
-  initial_capital: 1000000.0
+  initial_capital: 100000.0
   slippage_bps: 5
   fee_bps: 10
   replay_file: ""           # optional CSV for deterministic replay

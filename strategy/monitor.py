@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Dict, Optional, Set
 
 from alpha.registry import AlphaRegistry
-from core.models import OHLCV, Order, OrderStatus, StrategyState
+from core.models import OHLCV, Order, OrderStatus, OrderType, Side, StrategyState
 from data.buffer import LiveBuffer
 from data.resampler import CandleResampler, MultiResampler
 from execution.order_manager import OrderManager
@@ -86,6 +86,7 @@ class StrategyMonitor:
         # Time-based periodic logging (wall clock, not iteration count)
         self._last_status_log: float = 0.0
         self._status_log_interval: float = 60.0  # 1 minute
+        self._urgent_symbols: set[str] = set()
 
     async def run(self) -> None:
         """Main event loop."""
@@ -96,6 +97,11 @@ class StrategyMonitor:
         while self._running:
             got_update = await self._buffer.wait_for_update(timeout=5.0)
             if not got_update:
+                try:
+                    await self._service_urgent_exits()
+                    await self._order_manager.check_pending()
+                except Exception:
+                    logger.exception("Order maintenance failed; retaining reservations")
                 continue
 
             iteration += 1
@@ -128,6 +134,7 @@ class StrategyMonitor:
         self._last_trading_date = today
 
         # Check pending limit orders for fills
+        await self._service_urgent_exits()
         await self._order_manager.check_pending()
 
         snapshot = self._tracker.snapshot()
@@ -225,6 +232,13 @@ class StrategyMonitor:
                 )
 
             # ── Strategy Decision ──
+            pending = self._order_manager.for_symbol(symbol)
+            if pending:
+                if any(o.side == Side.BUY for o in pending) and not strategy.entry_still_valid(signal):
+                    await self._order_manager.cancel_symbol(symbol)
+                continue
+            if self._urgent_symbols or self._risk_shield.circuit_breaker_active:
+                continue
             snapshot = self._tracker.snapshot()
             order = strategy.on_signal(
                 signal, snapshot, current_price=candles[-1].close
@@ -234,7 +248,7 @@ class StrategyMonitor:
                 # ── Risk Validation ──
                 validated = self._risk_shield.validate(order, self._tracker)
                 if validated is not None:
-                    result = await self._order_manager.submit(validated)
+                    await self._order_manager.submit(validated)
                 else:
                     # Risk rejected the order — reset strategy state
                     strategy.on_cancel(order)
@@ -245,14 +259,8 @@ class StrategyMonitor:
             self._tracker, latest_candles, atr_values
         )
         for stop_order in stop_orders:
-            validated = self._risk_shield.validate(
-                stop_order, self._tracker, is_stop=True
-            )
-            if validated is not None:
-                await self._order_manager.submit(validated)
-                # Update strategy state
-                if stop_order.symbol in self._strategies:
-                    self._strategies[stop_order.symbol].force_flat()
+            self._urgent_symbols.add(stop_order.symbol)
+        await self._service_urgent_exits()
 
         # Circuit breaker check
         if self._risk_shield.check_circuit_breaker(self._tracker):
@@ -279,7 +287,8 @@ class StrategyMonitor:
             )
 
             # Roostoo mode: fetch live balance to verify API connectivity
-            if self._executor is not None and hasattr(self._executor, "get_balance"):
+            if (self._executor is not None and hasattr(self._executor, "get_balance")
+                    and not self._order_manager.has_pending and not self._urgent_symbols):
                 try:
                     roostoo_bal = await self._executor.get_balance()
                     if roostoo_bal:
@@ -293,26 +302,36 @@ class StrategyMonitor:
     async def _liquidate_all(self) -> None:
         """Emergency liquidation: sell all positions."""
         logger.critical("LIQUIDATING ALL POSITIONS")
-        snapshot = self._tracker.snapshot()
+        self._urgent_symbols.update(o.symbol for o in self._order_manager.active_orders.values())
+        self._urgent_symbols.update(p.symbol for p in self._tracker.snapshot().positions if p.quantity > 0)
+        await self._service_urgent_exits()
 
-        for pos in snapshot.positions:
-            if pos.quantity > 0:
-                from core.models import OrderType, Side
-
-                order = Order(
-                    symbol=pos.symbol,
-                    side=Side.SELL,
-                    order_type=OrderType.MARKET,
-                    quantity=pos.quantity,
-                )
-                await self._order_manager.submit(order)
-                if pos.symbol in self._strategies:
-                    self._strategies[pos.symbol].force_flat()
+    async def _service_urgent_exits(self) -> None:
+        """Retry unsent risk exits, but never replace an unresolved live order."""
+        for symbol in sorted(self._urgent_symbols):
+            pending = self._order_manager.for_symbol(symbol)
+            if any(o.urgent for o in pending):
+                continue
+            if pending and not await self._order_manager.cancel_symbol(symbol):
+                continue
+            quantity = self._tracker.get_position(symbol).quantity
+            if quantity <= 1e-10:
+                self._urgent_symbols.discard(symbol)
+                continue
+            order = Order(symbol=symbol, side=Side.SELL, order_type=OrderType.MARKET,
+                          quantity=quantity, urgent=True, reason="risk_exit")
+            await self._order_manager.submit(order)
+            if self._tracker.get_position(symbol).quantity <= 1e-10:
+                self._urgent_symbols.discard(symbol)
 
     def _on_order_event(self, order: Order) -> None:
         """Callback for order fill/cancel events."""
         if order.symbol in self._strategies:
             if order.status == OrderStatus.FILLED:
-                self._strategies[order.symbol].on_fill(order)
+                self._strategies[order.symbol].on_fill(order, self._tracker.get_position(order.symbol).quantity)
             elif order.status in (OrderStatus.CANCELLED, OrderStatus.REJECTED):
                 self._strategies[order.symbol].on_cancel(order)
+            strategy = self._strategies[order.symbol]
+            pending = self._order_manager.for_symbol(order.symbol)
+            strategy.sync_position(self._tracker.get_position(order.symbol).quantity,
+                                   bool(pending), pending[0].side if pending else None)

@@ -5,7 +5,7 @@ import math
 import threading
 from collections import deque
 from datetime import datetime
-from typing import Dict, List, Tuple
+from typing import Dict, Tuple
 
 import numpy as np
 
@@ -68,13 +68,24 @@ class PortfolioTracker:
         symbol = order.symbol
         pos = self._get_or_create_position(symbol)
         cost = order.filled_price * order.filled_quantity
-        fee = cost * self._fee_rate
+        fee_rate = order.fee_bps / 10000 if order.fee_bps is not None else self._fee_rate
+        fee = cost * fee_rate
+        base_fee = 0.0
+        if order.commission is not None:
+            asset = (order.commission_asset or "").upper()
+            if asset in {"USD", "USDT"}:
+                fee = order.commission
+            elif asset == symbol.split("/")[0]:
+                fee = 0.0
+                base_fee = order.commission
+            else:
+                raise ValueError(f"Unsupported commission asset: {asset}")
 
         if order.side == Side.BUY:
             # Update weighted average entry price
             old_value = pos.entry_price * pos.quantity
             new_value = order.filled_price * order.filled_quantity
-            pos.quantity += order.filled_quantity
+            pos.quantity += order.filled_quantity - base_fee
             pos.entry_price = (
                 (old_value + new_value) / pos.quantity if pos.quantity > 0 else 0.0
             )
@@ -94,9 +105,11 @@ class PortfolioTracker:
 
         elif order.side == Side.SELL:
             # Realize PnL
+            if order.filled_quantity + base_fee > pos.quantity + 1e-10:
+                raise ValueError("Sell fill exceeds reconciled long inventory")
             pnl = (order.filled_price - pos.entry_price) * order.filled_quantity
             pos.realized_pnl += pnl
-            pos.quantity -= order.filled_quantity
+            pos.quantity -= order.filled_quantity + base_fee
             pos.current_price = order.filled_price
             self._cash += cost - fee
 
@@ -121,6 +134,18 @@ class PortfolioTracker:
         if nav > self._peak_nav:
             self._peak_nav = nav
         self._nav_history.append((datetime.utcnow(), nav))
+
+    def on_fee(self, symbol: str, amount: float, asset: str | None) -> None:
+        """Book a delayed fee without duplicating the fill."""
+        with self._fill_lock:
+            if asset in {"USD", "USDT"}:
+                self._cash -= amount
+            elif asset == symbol.split("/")[0]:
+                if amount > self._get_or_create_position(symbol).quantity + 1e-10:
+                    raise ValueError("Base fee exceeds reconciled inventory")
+                self._get_or_create_position(symbol).quantity -= amount
+            else:
+                raise ValueError(f"Unsupported commission asset: {asset}")
 
     def update_prices(self, symbol: str, price: float) -> None:
         """Update current price and unrealized PnL for a position."""

@@ -49,6 +49,8 @@ class StrategyLogic:
         )
         exec_cfg = config.get("execution", {})
         self._limit_offset_bps: float = exec_cfg.get("limit_offset_bps", 5)
+        self._maker_preferred = exec_cfg.get("maker_preferred", False)
+        self._pending_exit_tier = 0
 
         # Signal confirmation: require N consecutive bars above entry threshold
         self._confirmation_bars: int = strategy_cfg.get("confirmation_bars", 2)
@@ -113,7 +115,7 @@ class StrategyLogic:
                     return None
 
                 # Use MARKET for urgent alpha, LIMIT otherwise to save on fees
-                if signal.alpha_score > self._urgent_alpha_threshold:
+                if not self._maker_preferred and signal.alpha_score > self._urgent_alpha_threshold:
                     order_type = OrderType.MARKET
                     price = None
                     order_type_label = "MARKET"
@@ -139,6 +141,7 @@ class StrategyLogic:
                     side=Side.BUY,
                     order_type=order_type,
                     quantity=qty,
+                    maker_preferred=self._maker_preferred,
                 )
                 if price is not None:
                     order.price = price
@@ -148,6 +151,14 @@ class StrategyLogic:
             # Graduated exits: check tiers first, then fallback to single threshold
             exit_order = self._check_graduated_exit(signal, portfolio)
             if exit_order is not None:
+                self._state = StrategyState.EXIT_PENDING
+                if self._maker_preferred:
+                    if current_price <= 0:
+                        self.on_cancel(exit_order)
+                        return None
+                    exit_order.order_type = OrderType.LIMIT
+                    exit_order.price = current_price * (1 + self._limit_offset_bps / 10000)
+                    exit_order.maker_preferred = True
                 return exit_order
 
         elif self._state == StrategyState.LONG_PENDING:
@@ -195,14 +206,11 @@ class StrategyLogic:
                     sell_pct = tier["sell_pct"]
                     sell_qty = pos_qty * sell_pct if sell_pct < 1.0 else pos_qty
                     sell_qty = min(sell_qty, pos_qty)
-                    self._exit_tier_reached = i + 1
+                    self._pending_exit_tier = i + 1
 
                     if sell_pct >= 1.0 or sell_qty >= pos_qty - 1e-12:
-                        self._state = StrategyState.FLAT
-                        self._exit_tier_reached = 0
-                        self._initial_hold_qty = 0.0
                         logger.info(
-                            "[%s] HOLDING → FLAT: alpha=%.3f < tier %d (%.2f), selling all %.6f",
+                            "[%s] HOLDING → EXIT_PENDING: alpha=%.3f < tier %d (%.2f), requesting sale of %.6f",
                             self._symbol,
                             signal.alpha_score,
                             i,
@@ -231,13 +239,12 @@ class StrategyLogic:
         # Fallback: single exit threshold
         if effective_alpha < self._exit_threshold:
             logger.info(
-                "[%s] HOLDING → FLAT: alpha=%.3f < %.3f, selling %.6f",
+                "[%s] HOLDING → EXIT_PENDING: alpha=%.3f < %.3f, requesting sale of %.6f",
                 self._symbol,
                 signal.alpha_score,
                 self._exit_threshold,
                 pos_qty,
             )
-            self._state = StrategyState.FLAT
             return Order(
                 symbol=self._symbol,
                 side=Side.SELL,
@@ -247,7 +254,7 @@ class StrategyLogic:
 
         return None
 
-    def on_fill(self, order: Order) -> None:
+    def on_fill(self, order: Order, remaining_quantity: float | None = None) -> None:
         """Called when an order is filled."""
         if order.symbol != self._symbol:
             return
@@ -266,9 +273,14 @@ class StrategyLogic:
             # Record trade for adaptive Kelly BEFORE resetting state
             if self._trade_tracker is not None and self._entry_price > 0 and order.filled_price:
                 self._trade_tracker.record_trade(self._entry_price, order.filled_price)
-            self._state = StrategyState.FLAT
-            self._entry_price = 0.0
-            logger.info("[%s] → FLAT (sold @ %.2f)", self._symbol, order.filled_price)
+            if remaining_quantity is not None and remaining_quantity > 1e-10:
+                self._state = StrategyState.HOLDING
+                self._exit_tier_reached = max(self._exit_tier_reached, self._pending_exit_tier)
+            else:
+                self._state = StrategyState.FLAT
+                self._entry_price = 0.0
+                self._exit_tier_reached = 0
+            self._pending_exit_tier = 0
 
     def on_cancel(self, order: Order) -> None:
         """Called when an order is cancelled or rejected."""
@@ -278,6 +290,25 @@ class StrategyLogic:
         if self._state == StrategyState.LONG_PENDING:
             self._state = StrategyState.FLAT
             logger.info("[%s] LONG_PENDING → FLAT (order cancelled)", self._symbol)
+        elif self._state == StrategyState.EXIT_PENDING:
+            self._state = StrategyState.HOLDING
+            self._pending_exit_tier = 0
+
+    def sync_position(self, quantity: float, pending: bool = False, pending_side=None) -> None:
+        """Reconcile strategy state with booked fills, not submitted intentions."""
+        if pending:
+            self._state = (StrategyState.EXIT_PENDING if pending_side == Side.SELL
+                           else StrategyState.LONG_PENDING)
+        else:
+            self._state = StrategyState.HOLDING if quantity > 1e-10 else StrategyState.FLAT
+        if quantity <= 1e-10:
+            self._entry_price = 0.0
+            self._exit_tier_reached = 0
+
+    def entry_still_valid(self, signal: Signal) -> bool:
+        alpha = (signal.decayed_alpha(datetime.utcnow(), self._decay_half_life_s)
+                 if self._decay_half_life_s < 999999 else signal.alpha_score)
+        return alpha > self._entry_threshold
 
     def force_flat(self) -> None:
         """Force state to FLAT (used by circuit breaker)."""

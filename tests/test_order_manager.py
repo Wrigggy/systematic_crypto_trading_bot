@@ -134,7 +134,7 @@ class TestTimeout:
         assert mgr.has_pending
 
         # Simulate 60s age by backdating created_at
-        submitted.created_at = datetime.utcnow() - timedelta(seconds=60)
+        mgr._active_orders[submitted.order_id].created_at = datetime.utcnow() - timedelta(seconds=60)
         await mgr.check_pending()
         assert not mgr.has_pending
 

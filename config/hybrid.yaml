@@ -1,0 +1,63 @@
+# Research-only template. Fill required null fields before replay; not live config.
+strategy:
+  engine: hybrid
+  decision_interval_seconds: null  # Deliberately undecided, must be explicit.
+  lookback_days: 20
+  sample_hours: 8
+  rules:
+    BTC/USDT: {entry_sigma: 1.0, exit_z: -0.5}
+    XRP/USDT: {entry_sigma: 1.0, exit_z: 0.0}
+    BNB/USDT: {entry_sigma: 2.0, exit_z: 0.0}
+  fusion:
+    mode: combined  # Explicit ablations: price_only, model_filter.
+    rule_weight: 0.5
+    model_weight: 0.5
+    model_score_scale: 3.0
+    entry_threshold: 1.0
+    strength_clip: 3.0
+  maker_preferred: true
+  review_after_seconds: 10800
+  max_holding_seconds: 14400
+  weak_support_seconds: 300
+  review_support_threshold: 0.0
+  exit_timeout_seconds: 120
+  stop_loss_pct: 0.03
+  trailing_stop_pct: 0.03
+  daily_drawdown_limit: 0.05
+  position_weight: 0.10
+  max_single_exposure: 0.15
+  max_portfolio_exposure: 0.50
+  max_positions: 3
+  max_price_age_seconds: 120
+forecast:
+  model_version: null  # Real artifact manifest identity, not a legacy ONNX alias.
+  preprocessing_version: null
+  max_data_age_seconds: 120
+  long_heads: [h120m, h240m]
+  normalization:
+    window_seconds: 86400
+    min_samples: 60
+    min_span_seconds: 82800
+    max_gap_seconds: 600
+  # Proposed untrained recipe, not an empirically selected optimum.
+  heads:
+    - {name: h15m, window_start_seconds: 450, window_end_seconds: 900, target: twap_log_return, weight: 0.2}
+    - {name: h30m, window_start_seconds: 900, window_end_seconds: 1800, target: twap_log_return, weight: 0.2}
+    - {name: h60m, window_start_seconds: 1800, window_end_seconds: 3600, target: twap_log_return, weight: 0.2}
+    - {name: h120m, window_start_seconds: 3600, window_end_seconds: 7200, target: twap_log_return, weight: 0.2}
+    - {name: h240m, window_start_seconds: 7200, window_end_seconds: 14400, target: twap_log_return, weight: 0.2}
+execution:
+  order_timeout_seconds: 120
+  fee_market_bps: 10.0
+  fee_limit_bps: 5.0
+  slippage_bps: 0.0
+  limit_penetration_bps: 2.0
+  max_requests_per_minute: 5
+  emergency_request_reserve: 1
+  max_price_age_seconds: 120
+replay:
+  events_path: null
+  start_at: null  # UTC epoch seconds, inclusive. Warmup events precede this.
+  end_at: null    # UTC epoch seconds, exclusive. Normally 14 days after start.
+  timer_seconds: 5  # Risk servicing, NOT signal decision cadence.
+  initial_capital: 100000

@@ -119,6 +119,26 @@ The core system is exchange-agnostic. Roostoo is a competition-specific executor
 **Why restart-to-reload over hot-reload?**
 Simplicity and correctness. Alpha JSONs are loaded and validated at startup. No risk of partial updates or inconsistent state mid-trading.
 
+## Hybrid mean reversion and multi horizon forecasts
+
+The research-only hybrid combines the teammate's price mean-reversion strength
+with causal multi-horizon model scores into one entry/ranking signal. It preserves
+price-only and binary model-filter controls for attribution. Desired holding time
+is three to four hours, with earlier risk/recovery exits; decision cadence is an
+explicit required parameter, not inferred from the model horizon.
+
+See [the implementation plan](docs/MULTIHORIZON_HYBRID_PLAN.md) and
+[the configuration template](config/hybrid.yaml). Offline replay is available via
+`python -m scripts.replay_hybrid --config CONFIG --output NEW_JSON_PATH` after
+supplying timestamped events, eligible forecasts and required configuration.
+No new multi-horizon weights or live inference adapter are included. `main.py`
+rejects hybrid configuration instead of falling back to the legacy alpha engine.
+
+Ordinary orders prefer passive limits; urgent risk exits use taker orders only
+after conflicting orders are reconciled. Roostoo requests share a rolling budget,
+actual fills/commissions drive accounting, and ambiguous orders block replacement.
+These code changes have not been deployed or validated against a live account.
+
 ## Future Work
 
 - **Portfolio optimizer**: Mean-variance, risk-parity allocation (currently score-tilted softmax)

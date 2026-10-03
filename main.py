@@ -21,7 +21,7 @@ from typing import Optional
 
 import yaml
 
-from core.models import Order, OrderType, Side, StrategyState
+from core.models import StrategyState
 from data.buffer import LiveBuffer
 from data.connector import WSConnector, BinanceSupplementaryFeed, prefetch_candles
 from data.sim_feed import SimulatedFeed
@@ -169,12 +169,16 @@ def _validate_config(config: dict) -> None:
 
 
 async def main(config: dict) -> None:
+    if config.get("strategy", {}).get("engine") == "hybrid":
+        raise ValueError("Hybrid is research-only: use python -m scripts.replay_hybrid; live model artifacts and deployment are not approved")
     mode = config.get("mode", "paper")
     logger.info("=== Trading Competition Framework ===")
     logger.info("Mode: %s", mode)
     logger.info("Symbols: %d pairs", len(config.get("symbols", [])))
 
     _validate_config(config)
+    if mode == "live" and config.get("execution", {}).get("maker_preferred", False):
+        raise ValueError("Maker-preferred execution is validated only for paper/Roostoo; CCXT live mode is disabled for this policy")
 
     # ── Build Components ──
 
@@ -212,7 +216,7 @@ async def main(config: dict) -> None:
     # 4. Executor
     paper_cfg = config.get("paper", {})
     if mode == "paper":
-        executor = SimExecutor(paper_cfg, buffer)
+        executor = SimExecutor({**paper_cfg, **config.get("execution", {})}, buffer)
     elif mode == "roostoo":
         from plugins.roostoo.executor import RoostooExecutor
         _validate_roostoo_config(config)
@@ -220,16 +224,15 @@ async def main(config: dict) -> None:
         roostoo_exec = RoostooExecutor(roostoo_cfg)
         roostoo_exec.set_trade_logger(trade_logger)
         await roostoo_exec.start()
+        roostoo_exec._starting = True  # Startup reads wait within the same API budget.
 
         # Sync initial balance from Roostoo
         balances = await roostoo_exec.get_balance()
         usd_balance = balances.get("USD", 0)
-        if usd_balance > 0:
+        if "USD" in balances:
             logger.info("Roostoo USD balance: $%.2f", usd_balance)
         else:
-            logger.warning(
-                "Could not fetch Roostoo balance, using config initial_capital"
-            )
+            raise RuntimeError("Missing confirmed USD balance; refusing synthetic capital in Roostoo mode")
 
         executor = roostoo_exec
     else:
@@ -262,6 +265,8 @@ async def main(config: dict) -> None:
 
     # 7. Portfolio tracker
     initial_capital = paper_cfg.get("initial_capital", 1000000.0)
+    if mode == "roostoo":
+        initial_capital = usd_balance
     fee_bps = paper_cfg.get("fee_bps", 10.0)
     tracker = PortfolioTracker(initial_capital, fee_bps)
 
@@ -271,7 +276,8 @@ async def main(config: dict) -> None:
     # 9. Order manager
     exec_cfg = config.get("execution", {})
     order_timeout = exec_cfg.get("order_timeout_seconds", 0)
-    order_manager = OrderManager(executor, tracker, timeout_seconds=order_timeout)
+    order_manager = OrderManager(executor, tracker, timeout_seconds=order_timeout,
+        journal_path=exec_cfg.get("order_journal_path", "logs/pending_orders.json") if mode == "roostoo" else "")
     if order_timeout > 0:
         logger.info("Order timeout: %ds for pending limit orders", order_timeout)
 
@@ -335,8 +341,7 @@ async def main(config: dict) -> None:
                 continue
             symbol = f"{asset}/USDT"
             if symbol not in config.get("symbols", []):
-                logger.warning("Skipping unknown asset %s during position recovery", asset)
-                continue
+                raise RuntimeError(f"Unconfigured inventory {asset}; reconcile before trading")
             ticker_price = await executor.get_ticker(symbol)
             if ticker_price and ticker_price > 0:
                 tracker.restore_position(symbol, qty, entry_price=ticker_price)
@@ -345,32 +350,10 @@ async def main(config: dict) -> None:
                     monitor.strategies[symbol]._entry_price = ticker_price
                 logger.info("Recovered position: %s qty=%.6f @ $%.2f", symbol, qty, ticker_price)
             else:
-                logger.warning("Could not get ticker for %s, skipping position recovery", symbol)
+                raise RuntimeError(f"Cannot value recovered inventory {symbol}")
 
-        # 11c. Seed trade — buy $2 of BTC to ensure participation record
-        has_any_position = any(
-            pos.quantity > 0 for pos in tracker.snapshot().positions
-        )
-        if not has_any_position:
-            seed_symbol = "BTC/USDT"
-            seed_price = await executor.get_ticker(seed_symbol)
-            if seed_price and seed_price > 0:
-                seed_qty = 2.0 / seed_price  # $2 worth (safely above $1 MiniOrder)
-                seed_order = Order(
-                    symbol=seed_symbol,
-                    side=Side.BUY,
-                    order_type=OrderType.MARKET,
-                    quantity=seed_qty,
-                )
-                result = await order_manager.submit(seed_order)
-                logger.info(
-                    "Seed trade: BUY $2 of %s qty=%.8f — status=%s",
-                    seed_symbol,
-                    seed_qty,
-                    result.status.value,
-                )
-            else:
-                logger.warning("Could not get BTC ticker for seed trade")
+        # No unconditional participation trade: every entry must come from the strategy.
+        executor._starting = False
 
     # ── Graceful Shutdown ──
     shutdown_event = asyncio.Event()

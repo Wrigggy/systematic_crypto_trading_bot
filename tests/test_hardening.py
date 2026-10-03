@@ -286,10 +286,10 @@ class TestPartialFills:
 
 
 class TestStuckOrders:
-    """Fix 10: Orders removed after repeated get_status failures."""
+    """Repeated network errors must not invent a cancellation."""
 
     @pytest.mark.asyncio
-    async def test_order_removed_after_max_errors(self):
+    async def test_order_retained_after_repeated_errors(self):
         executor = AsyncMock()
         executor.get_status = AsyncMock(side_effect=RuntimeError("API down"))
         tracker = PortfolioTracker(100_000.0)
@@ -309,9 +309,8 @@ class TestStuckOrders:
         for _ in range(5):
             await order_manager.check_pending()
 
-        # Order should be removed
-        assert order.order_id not in order_manager.active_orders
-        assert order.status == OrderStatus.CANCELLED
+        assert order.order_id in order_manager.active_orders
+        assert order.status == OrderStatus.SUBMITTED
 
 
 class TestWebSocketStaleness:

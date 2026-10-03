@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 import pytest
 
 from core.models import (
+    OrderStatus,
     Position,
     PortfolioSnapshot,
     Side,
@@ -165,8 +166,8 @@ class TestGraduatedExits:
         assert order is not None
         assert order.side == Side.SELL
         assert order.quantity == pytest.approx(0.5)
-        # Still HOLDING after partial exit
-        assert logic.state == StrategyState.HOLDING
+        # Submitted sell is not a fill; no second exit until reconciliation.
+        assert logic.state == StrategyState.EXIT_PENDING
 
     def test_full_exit_tier2(self, snap_100k, portfolio_with_btc):
         logic = StrategyLogic("BTC/USDT", self._config_with_tiers())
@@ -174,16 +175,20 @@ class TestGraduatedExits:
         logic.on_fill(make_filled_buy(price=100.0, qty=1.0))
 
         # Trigger tier 1
-        logic.on_signal(
+        partial = logic.on_signal(
             _make_signal_now(alpha=-0.15), portfolio_with_btc, current_price=100.0
         )
+        partial.status = OrderStatus.FILLED
+        partial.filled_quantity = partial.quantity
+        partial.filled_price = 100.0
+        logic.on_fill(partial, remaining_quantity=0.5)
         # Trigger tier 2 — should sell rest
         order = logic.on_signal(
             _make_signal_now(alpha=-0.35), portfolio_with_btc, current_price=100.0
         )
         assert order is not None
         assert order.side == Side.SELL
-        assert logic.state == StrategyState.FLAT
+        assert logic.state == StrategyState.EXIT_PENDING
 
     def test_no_tiers_falls_back_to_threshold(self, snap_100k, portfolio_with_btc):
         config = {
