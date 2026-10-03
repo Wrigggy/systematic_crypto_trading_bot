@@ -34,6 +34,7 @@ class HourlyHistory:
         self.hours = lookback_days * 24
         self.sample_hours = sample_hours
         self.values = {}
+        self._bands_cache = {}
 
     def add(self, symbol: str, closed_at: int, close: float, now: int):
         if (
@@ -49,19 +50,27 @@ class HourlyHistory:
         if history and closed_at < max(history):
             raise ValueError("Hourly observations must not arrive out of order")
         history[closed_at] = close
+        self._bands_cache.pop(symbol, None)
         for old in [t for t in history if t < closed_at - (self.hours + 1) * 3600]:
             del history[old]
 
     def bands(self, symbol: str, now: int):
         end = now // 3600 * 3600
         history = self.values.get(symbol, {})
+        cached = self._bands_cache.get(symbol)
+        cache_key = (end, len(history))
+        if cached is not None and cached[0] == cache_key:
+            return cached[1]
         if any(end - k * 3600 not in history for k in range(self.hours)):
+            self._bands_cache[symbol] = (cache_key, None)
             return None
         values = [
             history[end - k * 3600] for k in range(0, self.hours, self.sample_hours)
         ]
         std = pstdev(values)
-        return (mean(values), std) if std > 1e-12 else None
+        result = (mean(values), std) if std > 1e-12 else None
+        self._bands_cache[symbol] = (cache_key, result)
+        return result
 
 
 class HybridCoordinator:
@@ -198,10 +207,18 @@ class HybridCoordinator:
             ).entry_price
         if quantity <= 1e-10 and symbol in self.holdings:
             holding = self.holdings.pop(symbol)
+            closed_at = now
+            if order.filled_at is not None:
+                filled = order.filled_at
+                closed_at = int(filled.replace(tzinfo=timezone.utc).timestamp()
+                                if filled.tzinfo is None else filled.timestamp())
+                closed_at = max(holding.opened_at, min(now, closed_at))
             self._record(
                 "position_closed",
                 symbol,
-                holding_seconds=now - holding.opened_at,
+                holding_seconds=closed_at - holding.opened_at,
+                closed_at=closed_at,
+                receipt_delay_seconds=now - closed_at,
                 reason=holding.exit_reason or order.reason,
             )
             self.blocked_episode.add(symbol)

@@ -123,10 +123,17 @@ rejects missing, stale or non-causal predictions and normalizes by asset/horizon
 using past values only. `scripts/replay_hybrid.py` is the offline entry point;
 `config/hybrid.yaml` deliberately leaves decision cadence and artifacts unset.
 
-Target actual holds of three to four hours, without a minimum lock-in. Training,
-feature-exact inference integration and live deployment are not completed. Obtain
+Target actual holds of three to four hours, without a minimum lock-in. E35 shared
+multi-horizon training is complete; feature-exact live integration and deployment
+are not approved. Obtain
 the user's available machine and fresh compute budget before a training run; do
 not reuse expired authorizations or stop a rented machine.
+
+Current E36 exception: the user authorized four hours until October3 18:35:55UTC
+and explicitly requires stop/inactivate of instance53989850 after backup. Do not
+destroy it or apply this instruction to older instances. The offline E36 adapter
+is `scripts/replay_research_bundle.py`; its five-minute decision cadence is an
+experiment setting, not a change to the unresolved production default.
 
 Execution now distinguishes UNKNOWN and EXIT_PENDING states. Maker preference
 overrides legacy strong-alpha market entries. Reconcile partial/cancelled fills

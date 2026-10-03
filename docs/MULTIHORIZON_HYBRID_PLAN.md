@@ -223,6 +223,15 @@ engineering behavior only.
 
 ## Training boundary
 
+October3 status amendment: E35 shared five-head training and inert historical
+exports are complete. E36 now has explicit four-hour authority for grouped-model
+controls, one validation-led smaller-model adjustment if required, signal
+integration and offline replay. `scripts/replay_research_bundle.py` consumes
+versioned NPZ/JSON bundles with fixed five-minute decisions and5second risk/price
+observations. It compares explicit price-only/combined and maker/taker arms.
+This is not a live feed or certified Roostoo fill model. The following paragraphs
+describe the original pre-training implementation boundary, not current completion.
+
 Not completed: new multi-horizon training, a feature/scaler-identical production
 inference adapter, real eligible forecast exports, calibrated financial replay,
 learned fusion, or live deployment. The current deliverable is the joint strategy,
