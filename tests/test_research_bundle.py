@@ -62,3 +62,36 @@ def test_fast_score_moments_match_statistics_reference():
             past = values[max(0, i - 50):i].tolist()
             expected = (value - mean(past)) / pstdev(past)
             assert result['short'] == pytest.approx(expected, abs=1e-12)
+
+
+@pytest.mark.asyncio
+async def test_matrix_keeps_validation_choice_and_all_controls(tmp_path, monkeypatch):
+    import time
+    from scripts import run_research_matrix as matrix
+    study = tmp_path / 'study'
+    study.mkdir()
+    (study / 'selection.json').write_text(json.dumps(dict(selected='shared',
+        selection_uses='validation_only', test_opened=False)))
+    manifest = dict(model_version='fixture', preprocessing_version='fixture', heads=[])
+    for name in ('shared', 'grouped'):
+        folder = study / f'bundle_{name}'
+        folder.mkdir()
+        (folder / 'bundle.json').write_text(json.dumps(manifest))
+    prices = tmp_path / 'prices.npz'
+    prices.with_suffix('.json').write_text(json.dumps(dict(replay_start=0, replay_end=14 * 86400)))
+    seen = []
+    async def fake_replay(cfg, events):
+        seen.append(cfg)
+        return dict(summary=dict(net_return=-.01, active_fill_days_utc8=0), events=[])
+    monkeypatch.setattr(matrix, 'run_replay', fake_replay)
+    monkeypatch.setattr(matrix, 'bundle_events', lambda *args: iter(()))
+    monkeypatch.setattr(matrix, 'extra_metrics', lambda result: {})
+    out = tmp_path / 'results'
+    await matrix.run(study, prices, out, time.time() + 60)
+    report = json.loads((out / 'comparison.json').read_text())
+    assert report['status'] == 'complete'
+    assert report['selected_by_validation'] == 'shared'
+    assert len(seen) == 9
+    assert all(c['strategy']['decision_interval_seconds'] == 300 for c in seen)
+    assert sum(c['strategy']['fusion']['mode'] == 'price_only' for c in seen) == 2
+    assert sum(c['strategy']['model_exit_enabled'] for c in seen) == 3
