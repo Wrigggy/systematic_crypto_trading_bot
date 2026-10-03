@@ -129,11 +129,15 @@ are not approved. Obtain
 the user's available machine and fresh compute budget before a training run; do
 not reuse expired authorizations or stop a rented machine.
 
-Current E36 exception: the user authorized four hours until October3 18:35:55UTC
-and explicitly requires stop/inactivate of instance53989850 after backup. Do not
-destroy it or apply this instruction to older instances. The offline E36 adapter
+E37 closure (provisional e36 runtime): the user authorized four hours until
+October3 18:35:55UTC and explicitly required stop/inactivate of instance53989850
+after backup. Training/backup/replay are complete; stop CLI exited0 and SSH closed,
+and the user confirmed inactive at15:57UTC. Do not restart, destroy, or apply this
+instruction to older instances. The offline research adapter
 is `scripts/replay_research_bundle.py`; its five-minute decision cadence is an
 experiment setting, not a change to the unresolved production default.
+Eleven replays completed; no policy meets eight active days. Shared-model positive
+PnL is sparse and retrospective. No deployment approval or new experiment budget.
 
 Execution now distinguishes UNKNOWN and EXIT_PENDING states. Maker preference
 overrides legacy strong-alpha market entries. Reconcile partial/cancelled fills

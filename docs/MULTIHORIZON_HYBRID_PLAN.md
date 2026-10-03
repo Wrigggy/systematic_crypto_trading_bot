@@ -1,5 +1,44 @@
 # Multi horizon model and mean reversion implementation plan
 
+## October 3 E37 implementation and experiment closure
+
+Real strict-FP32 forecast bundles now enter the offline strategy through
+`scripts/replay_research_bundle.py`. `scripts/run_research_matrix.py` completes
+eleven predeclared controls with a five-minute decision cadence. This is not a
+live feed or a change to the unresolved production cadence. Models are trained
+and backed up in the sibling e2eCryptoModels repo; no model weights are committed
+here and no live deployment is approved.
+
+Four new grouped-horizon GRUs and two small MLPs failed the validation-only
+replacement criterion, retaining the two-seed E35 shared model. Five equal-weight
+causal head zscores feed the fixed joint price/model strength. The price component
+remains the frozen E34-derived adaptation below, not teammate E36's later corrected
+assignments; the teammate's cash-start correction was preserved in the research repo.
+
+The fourteen-day September3--16Singapore replay starts with100,000cash and no
+positions. Shared+MR with maker preference returns+0.21457percent without model
+exit review, or+0.14041percent with review after3h; only4active days in either.
+Taker variants return+0.04437/+0.04366percent on7active days. All eleven policies
+fail the8-active-day requirement. With review the maker median hold is3.184h,
+60percent of completed holds lie in3--4h, profit factor1.56754, five round trips.
+One winning trade exceeds the total profit. Grouped/MLP remain negative.
+
+Maker preference includes taker exits for stops/deadlines/timeouts, not maker-only
+execution. The replay uses5/10bps fees and no modeled slippage, with2/5bps price
+penetration. Cached Binance observations are not measured Roostoo spread, queues,
+latency or a production market-data HTTP load. The explicit simulated execution
+calls use the five-request/minute budget. Previously inspected dates and sparse
+fills prevent profitability, significance or venue-equivalence claims.
+
+Full evidence: `logs/e37_final_20261003/comparison.json` locally and the sibling
+research repo's tracked `docs/assets/grouped_hybrid_20261003/` (all comparisons,
+DailyIC, selection, learning curves, backup/parity/lifecycle receipts). Bot tests:
+287passed/one skipped/four pre-existing warnings. No live orders were sent.
+
+The user superseded keep-running for instance53989850 only. After verified backup,
+the stop CLI returned0 but the receipt parser could not decode non-JSON output.
+SSH then closed; the user confirmed inactive at15:57UTC. No restart or Destroy.
+
 ## Scope and decisions
 
 Implement a research-only hybrid: the old price mean-reversion signal and new
