@@ -137,9 +137,12 @@ No unconditional participation or seed trade.
 Use 14-day cash-start windows with external indicator and forecast-history warmup.
 Do not call E34 continuous-position windows equivalent to cash-start competitions.
 Keep the original E34 audit baseline, adapted price-only control, binary model
-filter and joint-signal fusion separate. The latter three share the adapted
-holding/risk policy, so price-only is not mislabeled an exact E34 reproduction.
-Use a later isolated model-exit ablation to attribute exit changes.
+filter and joint-signal fusion separate. The latter three share the price-recovery,
+stop and four-hour deadline mechanics, so price-only is not mislabeled an exact
+E34 reproduction. Price-only never consults models, including for exits. For an
+entry-only comparison, explicitly set `model_exit_enabled: false` in all three
+arms. Then compare model-exit enabled versus disabled with identical entry logic
+to attribute changes from the three-hour review separately.
 Compare taker and maker-preferred execution with
 identical signals and risk. Use shared cash, exposure and request constraints.
 
@@ -214,7 +217,7 @@ invented number in a replay that contains prices and predictions only.
 Local synthetic tests cover fusion sensitivity to both branches, missing-model
 behavior, strict causal packets, warmup, fill timing, early recovery, maker timeout,
 deadline/stop exits, partial-fill accounting, cancellation races and request limits.
-The regression suite currently passes 278 tests with one optional test skipped;
+The regression suite currently passes 280 tests with one optional test skipped;
 four pre-existing NumPy small-sample metric warnings remain. These checks establish
 engineering behavior only.
 

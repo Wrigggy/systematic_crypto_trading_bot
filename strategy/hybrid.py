@@ -335,7 +335,11 @@ class HybridCoordinator:
         holding = self.holdings[symbol]
         if price >= holding.target:
             await self._exit(symbol, "price_recovery", now)
-        elif now - holding.opened_at >= self.review:
+        elif (
+            self.fusion.mode != "price_only"
+            and self.config.get("model_exit_enabled", True)
+            and now - holding.opened_at >= self.review
+        ):
             weak = signal is not None and signal["long_support"] <= self.config.get(
                 "review_support_threshold", 0.0
             )

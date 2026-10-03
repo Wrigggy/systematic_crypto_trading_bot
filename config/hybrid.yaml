@@ -16,6 +16,7 @@ strategy:
     entry_threshold: 1.0
     strength_clip: 3.0
   maker_preferred: true
+  model_exit_enabled: true  # Disable in all arms to isolate entry fusion; ignored by price_only.
   review_after_seconds: 10800
   max_holding_seconds: 14400
   weak_support_seconds: 300

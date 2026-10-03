@@ -12,7 +12,7 @@ from execution.sim_executor import SimExecutor
 from plugins.model_inference.forecasts import CausalScores, ForecastBook, ForecastPacket
 from risk.tracker import PortfolioTracker
 from strategy.fusion import SignalFusion
-from strategy.hybrid import HybridCoordinator, HourlyHistory
+from strategy.hybrid import Holding, HybridCoordinator, HourlyHistory
 
 
 def packet(t, value, symbol="BTC/USDT", **updates):
@@ -305,3 +305,20 @@ async def test_joint_signal_ranks_candidates_before_shared_cash_allocation():
         "XRP/USDT",
         "BTC/USDT",
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "settings",
+    [
+        {"fusion": {"mode": "price_only"}},
+        {"fusion": {"mode": "combined"}, "model_exit_enabled": False},
+    ],
+)
+async def test_price_only_and_entry_ablation_never_consult_model_for_exit(settings):
+    clock, tracker, manager, hybrid, step = await setup_hybrid(**settings)
+    hybrid.holdings["BTC/USDT"] = Holding(clock[0] - 12000, 101, 99, 99)
+    hybrid._exit = AsyncMock()
+    await hybrid._holding_decision("BTC/USDT", 99, {"long_support": -3}, clock[0])
+    await hybrid._holding_decision("BTC/USDT", 99, {"long_support": -3}, clock[0] + 600)
+    hybrid._exit.assert_not_awaited()
