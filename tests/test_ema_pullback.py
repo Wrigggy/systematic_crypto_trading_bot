@@ -89,3 +89,16 @@ def test_private_file_is_opt_in_and_does_not_override_environment(tmp_path, monk
     monkeypatch.setenv('ROOSTOO_COMP_API_SECRET', 'compsecret')
     _apply_env_overrides(config)
     assert config['roostoo']['api_key'] == 'compkey'
+
+
+@pytest.mark.asyncio
+async def test_executor_connection_checker_cannot_send_mutations():
+    from scripts.check_roostoo_executor import ReadOnlyExecutor
+    executor = ReadOnlyExecutor({})
+    with pytest.raises(RuntimeError, match='placement is disabled'):
+        await executor.execute(None)
+    with pytest.raises(RuntimeError, match='Cancellation is disabled'):
+        await executor.cancel('anything', 'BTC/USDT')
+    with pytest.raises(RuntimeError, match='endpoint violation'):
+        await executor._request('POST', '/v3/place_order', {}, signed=True)
+    assert executor._budget.total == 0

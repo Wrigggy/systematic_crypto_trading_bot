@@ -1,0 +1,21 @@
+{
+  "status": "size_lineage_and_endpoint_parity_checked",
+  "strict_inference_parity_passed": true,
+  "manifest_files": 23,
+  "manifest_bytes": 392028244,
+  "file_hashes_verified": false,
+  "matched_training_lineage": [
+    "seed42",
+    "seed43"
+  ],
+  "bundles": [
+    {
+      "bundle": "bundle_focused",
+      "asset_time_probes": 6,
+      "heads": 5,
+      "max_cpu_gpu_error": 1.2170138971026243e-09,
+      "passed": true
+    }
+  ],
+  "production_feed_validated": false
+}

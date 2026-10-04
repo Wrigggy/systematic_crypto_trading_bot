@@ -123,11 +123,70 @@ older TF32-enabled reference: this is not a pure objective-weight ablation.
 No adaptive search or post-hoc policy reselection is scheduled. Two seeds and
 their validation-selected checkpoints are retained regardless of replay PnL.
 
-Training/backup completion and measured results will be added only after observed.
+## Completed new-model results
+
+Both seeds finished with validation-only early stopping. Seed42 selected11,250
+updates and stopped19,250; seed43 selected750 and stopped8,750. Weighted validation
+MSE compared with the reweighted E35 checkpoints is2.011160vs2.014330 and
+2.021719vs2.018321 respectively: +0.157percent and-0.168percent relative improvement.
+The seed mean is essentially unchanged, not a seed-stable validation gain.
+Each model can sample5,134,056 strongly overlapping asset/time rows; this is not
+that many independent observations or a claim of traversing every training row.
+
+| New-model frozen case | Net return | Max drawdown | Closed trades | Active days |
+|---|---:|---:|---:|---:|
+| Primary maker, 2bps | -0.13645% | 0.23406% | 3 | 2 |
+| Conservative maker, 5bps | -0.13469% | 0.23230% | 3 | 2 |
+| Taker sensitivity | -0.29701% | 0.42091% | 4 | 2 |
+| Price-only EMA, repeated control | -0.17892% | 0.31409% | 3 | 2 |
+
+Primary net PnL is-$136.45 on100k; three trade PnLs are-$95.30,-$100.26,+$59.11.
+The improvement over the old model is entirely the additional winning trade.
+Win fraction33.3percent, profit factor0.3023, median hold120minutes,2of3holds within
+1--2hours. There are four maker fills and two deadline taker fills; fees$39.84.
+Adding fees back on the same fills still leaves-$96.61 price PnL. No open positions,
+pending orders or unreconciled simulated fills remain. None meets8active days or
+fivefold frequency. Taker fills alter trade paths, so the maker/taker PnL difference
+must not be attributed solely to the fee-rate difference.
+
+DailyIC is computed per Singapore day/per asset, then averaged over days and
+equal-weighted over assets. All dates remain inspected and labels overlap.
+
+| Head | Old DailyIC, trade3 | New DailyIC, trade3 | New Daily RankIC, trade3 | New DailyIC, all8 |
+|---|---:|---:|---:|---:|
+| 15m | 0.01084 | 0.05261 | 0.03188 | 0.04987 |
+| 30m | 0.01786 | 0.05582 | 0.03321 | 0.06862 |
+| 60m | 0.02536 | 0.09974 | 0.08230 | 0.09823 |
+| 120m | 0.04982 | 0.08247 | 0.09933 | 0.08323 |
+| 240m | 0.00367 | 0.05577 | 0.08085 | 0.07346 |
+
+This is a useful retrospective ranking diagnostic, not a fresh holdout or proven
+tradable advantage.60/120/240minute ensemble MSE still loses to the constant
+train-mean prediction. New weights, precision, GPU hardware and panel placement
+differ from E35; do not claim a clean causal loss-weight effect.
+
+All23manifest-listed files/392,028,244bytes are backed up locally with size,
+readability and scaler/label lineage checks, not full-file hashes. Six ensemble
+asset/time endpoint probes pass CPU/GPU parity, max1.217e-9. Remote training and
+exports finished14:45:56UTC; workerEXITED and GPU0percent utilization. At14:50UTC
+the owned guard was stopped; instance53113057 remained SSH-responsive. No instance
+Stop/Inactivate/Destroy command was issued. The four-hour ceiling was not exhausted
+and does not schedule another experiment. Keeping the instance open can incur charges.
+
+Financial receipt: `assets/ema_pullback_20261004/focused_comparison.json`.
+Full models, loss curves, metrics and lifecycle are in sibling e2eCryptoModels:
+`runs/ema_pullback_20261004` and `docs/assets/ema_pullback_20261004`.
+Both source repositories retain the failed reference and all four fixed cases.
+
+The actual `RoostooExecutor` also passed a separately guarded read-only smoke
+check at14:55UTC: startup88instruments, balance and a fresh valid BTC quote,
+five HTTP attempts, zero orders/cancels. It retains the normal rolling budget
+and emergency reserve. Receipt: `assets/ema_pullback_20261004/executor_readonly.json`.
+This is not a deployed hybrid live feed. No automatic trading has been started.
 
 ## Verification so far
 
-Bot regression suite: 299 passed, one optional skip, four pre-existing small-sample
+Final bot regression suite: 300 passed, one optional skip, four pre-existing small-sample
 NumPy metric warnings. Research local suite: 184 passed, two CUDA skips. Remote
 startup suite: 24 passed. The discarded 12-update throughput/label canary has
 120 direct TWAP probes with maximum error2.114e-9 and mean step time55.0ms.

@@ -148,3 +148,9 @@ one configured rolling HTTP budget (five requests/minute by user requirement),
 including reads, and uses cumulative actual commission receipts. Unresolved
 journals block restart pending explicit reconciliation. Paper/replay fill behavior
 is an engineering approximation, not proven venue matching behavior.
+
+E38 October4 is complete: two short-focused GRUs, backup/parity and fixed EMA
+replays. New primary-0.13645percent,3trades,2active days; no deployment approval.
+Instance53113057 remains online at user request; research exited and owned guard
+stopped. No further experiment dispatched. Testing API credentials are only in
+ignored private local storage; read-only checks passed, no live orders were sent.
