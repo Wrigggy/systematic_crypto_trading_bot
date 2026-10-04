@@ -1,0 +1,317 @@
+{
+  "windows_audited": 100,
+  "maximum_cash_reconciliation_error": 1.211901690112427e-10,
+  "all_flat_and_reconciled": true,
+  "diagnostics": {
+    "strict_maker_2bps": {
+      "groups": {
+        "symbol": {
+          "BNB/USDT": {
+            "trades": 17,
+            "net_pnl": -532.8621682853272,
+            "gross_pnl": -293.2722096861653,
+            "fees": 239.5899585991619,
+            "win_rate": 0.47058823529411764
+          },
+          "BTC/USDT": {
+            "trades": 8,
+            "net_pnl": -290.8575365234148,
+            "gross_pnl": -176.10540046051392,
+            "fees": 114.75213606290087,
+            "win_rate": 0.5
+          },
+          "XRP/USDT": {
+            "trades": 8,
+            "net_pnl": -293.4689642107486,
+            "gross_pnl": -173.69754166138955,
+            "fees": 119.77142254935904,
+            "win_rate": 0.375
+          }
+        },
+        "size_multiplier": {
+          "1.0": {
+            "trades": 33,
+            "net_pnl": -1117.1886690194906,
+            "gross_pnl": -643.0751518080688,
+            "fees": 474.1135172114218,
+            "win_rate": 0.45454545454545453
+          }
+        },
+        "exit_reason": {
+          "exit_timeout": {
+            "trades": 8,
+            "net_pnl": 326.2556756570108,
+            "gross_pnl": 446.64345599135777,
+            "fees": 120.38778033434697,
+            "win_rate": 1.0
+          },
+          "holding_deadline": {
+            "trades": 19,
+            "net_pnl": -902.1975119719392,
+            "gross_pnl": -617.8997179792132,
+            "fees": 284.2977939927261,
+            "win_rate": 0.15789473684210525
+          },
+          "price_recovery": {
+            "trades": 4,
+            "net_pnl": 137.24234569035676,
+            "gross_pnl": 177.33052196957033,
+            "fees": 40.08817627921357,
+            "win_rate": 1.0
+          },
+          "price_stop": {
+            "trades": 2,
+            "net_pnl": -678.4891783949189,
+            "gross_pnl": -649.1494117897837,
+            "fees": 29.339766605135193,
+            "win_rate": 0.0
+          }
+        }
+      },
+      "pooled_hold_median_seconds": 7200.0,
+      "hold_fraction_1_to_2h": 0.7575757575757576,
+      "exit_reasons": {
+        "exit_timeout": 8,
+        "price_recovery": 4,
+        "price_stop": 2,
+        "holding_deadline": 19
+      }
+    },
+    "soft_maker_2bps": {
+      "groups": {
+        "symbol": {
+          "BNB/USDT": {
+            "trades": 392,
+            "net_pnl": -6647.692418906384,
+            "gross_pnl": -2584.310762287694,
+            "fees": 4063.3816566186897,
+            "win_rate": 0.42857142857142855
+          },
+          "BTC/USDT": {
+            "trades": 351,
+            "net_pnl": -6308.04041573776,
+            "gross_pnl": -2670.284733738761,
+            "fees": 3637.755681998998,
+            "win_rate": 0.4045584045584046
+          },
+          "XRP/USDT": {
+            "trades": 466,
+            "net_pnl": -8619.840781660383,
+            "gross_pnl": -4075.2313638753894,
+            "fees": 4544.609417784993,
+            "win_rate": 0.3969957081545064
+          }
+        },
+        "size_multiplier": {
+          "0.5": {
+            "trades": 719,
+            "net_pnl": -9014.296920967603,
+            "gross_pnl": -3872.7436548759997,
+            "fees": 5141.553266091602,
+            "win_rate": 0.4381084840055633
+          },
+          "1.0": {
+            "trades": 490,
+            "net_pnl": -12561.276695336923,
+            "gross_pnl": -5457.083205025845,
+            "fees": 7104.193490311079,
+            "win_rate": 0.3673469387755102
+          }
+        },
+        "exit_reason": {
+          "exit_timeout": {
+            "trades": 151,
+            "net_pnl": 5114.568925604607,
+            "gross_pnl": 6667.0891310204015,
+            "fees": 1552.5202054157946,
+            "win_rate": 1.0
+          },
+          "holding_deadline": {
+            "trades": 899,
+            "net_pnl": -25859.708066077408,
+            "gross_pnl": -16296.374413525511,
+            "fees": 9563.333652551899,
+            "win_rate": 0.23915461624026696
+          },
+          "price_recovery": {
+            "trades": 129,
+            "net_pnl": 5183.540474484007,
+            "gross_pnl": 6043.080409116058,
+            "fees": 859.5399346320513,
+            "win_rate": 1.0
+          },
+          "price_stop": {
+            "trades": 30,
+            "net_pnl": -6013.974950315729,
+            "gross_pnl": -5743.621986512793,
+            "fees": 270.3529638029362,
+            "win_rate": 0.0
+          }
+        }
+      },
+      "pooled_hold_median_seconds": 7200.0,
+      "hold_fraction_1_to_2h": 0.8850289495450786,
+      "exit_reasons": {
+        "holding_deadline": 899,
+        "exit_timeout": 151,
+        "price_recovery": 129,
+        "price_stop": 30
+      }
+    },
+    "soft_maker_5bps": {
+      "groups": {
+        "symbol": {
+          "BNB/USDT": {
+            "trades": 265,
+            "net_pnl": -4963.710900384891,
+            "gross_pnl": -2207.1097015915875,
+            "fees": 2756.6011987933034,
+            "win_rate": 0.43018867924528303
+          },
+          "BTC/USDT": {
+            "trades": 243,
+            "net_pnl": -4707.650642555998,
+            "gross_pnl": -2177.439562544263,
+            "fees": 2530.2110800117357,
+            "win_rate": 0.4156378600823045
+          },
+          "XRP/USDT": {
+            "trades": 336,
+            "net_pnl": -7687.004348974957,
+            "gross_pnl": -4362.343902631605,
+            "fees": 3324.6604463433528,
+            "win_rate": 0.375
+          }
+        },
+        "size_multiplier": {
+          "0.5": {
+            "trades": 505,
+            "net_pnl": -8155.953390736692,
+            "gross_pnl": -4479.9518855598435,
+            "fees": 3676.0015051768482,
+            "win_rate": 0.42376237623762375
+          },
+          "1.0": {
+            "trades": 339,
+            "net_pnl": -9202.412501179155,
+            "gross_pnl": -4266.941281207612,
+            "fees": 4935.471219971543,
+            "win_rate": 0.3746312684365782
+          }
+        },
+        "exit_reason": {
+          "exit_timeout": {
+            "trades": 113,
+            "net_pnl": 3876.4245643740346,
+            "gross_pnl": 5024.035620501672,
+            "fees": 1147.611056127638,
+            "win_rate": 1.0
+          },
+          "holding_deadline": {
+            "trades": 645,
+            "net_pnl": -18920.89139632938,
+            "gross_pnl": -12126.453271727536,
+            "fees": 6794.438124601844,
+            "win_rate": 0.2589147286821705
+          },
+          "price_recovery": {
+            "trades": 61,
+            "net_pnl": 2898.0255762196043,
+            "gross_pnl": 3333.4407889861895,
+            "fees": 435.41521276658506,
+            "win_rate": 1.0
+          },
+          "price_stop": {
+            "trades": 25,
+            "net_pnl": -5211.924636180105,
+            "gross_pnl": -4977.916304527781,
+            "fees": 234.00833165232447,
+            "win_rate": 0.0
+          }
+        }
+      },
+      "pooled_hold_median_seconds": 7200.0,
+      "hold_fraction_1_to_2h": 0.8933649289099526,
+      "exit_reasons": {
+        "holding_deadline": 645,
+        "exit_timeout": 113,
+        "price_stop": 25,
+        "price_recovery": 61
+      }
+    },
+    "soft_taker": {
+      "groups": {
+        "symbol": {
+          "BNB/USDT": {
+            "trades": 715,
+            "net_pnl": -12191.606707341049,
+            "gross_pnl": -1789.2064394331255,
+            "fees": 10402.400267907924,
+            "win_rate": 0.4307692307692308
+          },
+          "BTC/USDT": {
+            "trades": 675,
+            "net_pnl": -11581.474775875202,
+            "gross_pnl": -1912.094662624113,
+            "fees": 9669.380113251089,
+            "win_rate": 0.3851851851851852
+          },
+          "XRP/USDT": {
+            "trades": 801,
+            "net_pnl": -11793.495896358194,
+            "gross_pnl": -1091.9245407595954,
+            "fees": 10701.571355598599,
+            "win_rate": 0.41448189762796506
+          }
+        },
+        "size_multiplier": {
+          "0.5": {
+            "trades": 1282,
+            "net_pnl": -15233.965500484363,
+            "gross_pnl": -2535.807948645318,
+            "fees": 12698.157551839044,
+            "win_rate": 0.4235569422776911
+          },
+          "1.0": {
+            "trades": 909,
+            "net_pnl": -20332.611879090084,
+            "gross_pnl": -2257.417694171516,
+            "fees": 18075.194184918568,
+            "win_rate": 0.3927392739273927
+          }
+        },
+        "exit_reason": {
+          "holding_deadline": {
+            "trades": 1579,
+            "net_pnl": -45919.58119169321,
+            "gross_pnl": -23483.60346524678,
+            "fees": 22435.977726446432,
+            "win_rate": 0.21279290690310323
+          },
+          "price_recovery": {
+            "trades": 564,
+            "net_pnl": 19439.94590764827,
+            "gross_pnl": 27200.693881806495,
+            "fees": 7760.747974158227,
+            "win_rate": 1.0
+          },
+          "price_stop": {
+            "trades": 48,
+            "net_pnl": -9086.942095529505,
+            "gross_pnl": -8510.316059376551,
+            "fees": 576.626036152953,
+            "win_rate": 0.0
+          }
+        }
+      },
+      "pooled_hold_median_seconds": 7200.0,
+      "hold_fraction_1_to_2h": 0.8644454586946599,
+      "exit_reasons": {
+        "holding_deadline": 1579,
+        "price_recovery": 564,
+        "price_stop": 48
+      }
+    }
+  },
+  "limitation": "All accounting is simulated; does not verify venue matching or forecast generalization."
+}

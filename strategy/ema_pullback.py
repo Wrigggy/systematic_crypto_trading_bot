@@ -27,6 +27,10 @@ class EmaPullbackHistory:
         self.slow_hours = float(config.get('slow_half_life_hours', 24))
         self.vol_hours = float(config.get('vol_half_life_hours', 24))
         self.warmup = int(config.get('warmup_bars', 2016))
+        self.trend_mode = config.get('trend_mode', 'strict')
+        self.downtrend_size = float(config.get('downtrend_size_multiplier', .5))
+        if self.trend_mode not in {'strict', 'soft'} or not 0 < self.downtrend_size <= 1:
+            raise ValueError('Invalid EMA trend mode or downside size')
         if not (0 < self.fast_hours < self.slow_hours and self.vol_hours > 0 and self.warmup >= 13):
             raise ValueError('Invalid EMA horizons or warmup')
         self.states = {}
@@ -74,10 +78,20 @@ class EmaPullbackHistory:
         if self.bands(symbol, now) is None:
             return 'ema_unready'
         state = self.states[symbol]
-        if not (state.fast > state.slow and state.fast > state.fast_history[0]):
+        if self.trend_mode == 'strict' and not (
+            state.fast > state.slow and state.fast > state.fast_history[0]
+        ):
             return 'trend_not_up'
         if state.closes[-1] <= state.closes[-2]:
             return 'no_completed_bar_recovery'
         if (state.fast / price - 1) * 10000 < min_recovery_bps:
             return 'insufficient_recovery_distance'
         return 'qualified'
+
+    def size_multiplier(self, symbol, now):
+        """Soft trend changes risk, not forecast eligibility or the MR trigger."""
+        if self.bands(symbol, now) is None:
+            return 0.
+        state = self.states[symbol]
+        return (self.downtrend_size if self.trend_mode == 'soft'
+                and state.fast <= state.slow else 1.)

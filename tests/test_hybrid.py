@@ -242,7 +242,8 @@ async def test_ema_invalidates_pending_buy_before_next_decision():
         ema_pullback={'enabled': True, 'warmup_bars': 13})
     reason = ['qualified']
     hybrid.ema = SimpleNamespace(observe=lambda *args: None,
-        bands=lambda *args: (100., 1.), entry_check=lambda *args: reason[0])
+        bands=lambda *args: (100., 1.), entry_check=lambda *args: reason[0],
+        size_multiplier=lambda *args: 1.)
     start = clock[0]
     await step(start, 98.9)
     assert manager.has_pending and not hybrid.holdings

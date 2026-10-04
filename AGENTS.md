@@ -154,3 +154,10 @@ replays. New primary-0.13645percent,3trades,2active days; no deployment approval
 Instance53113057 remains online at user request; research exited and owned guard
 stopped. No further experiment dispatched. Testing API credentials are only in
 ignored private local storage; read-only checks passed, no live orders were sent.
+
+E39 October4 expands local price-policy history to one year of three-asset minute
+bars and 25 flat-start 14-day windows. Soft EMA trend sizing is opt-in; 100 window
+replays show greater activity but negative average returns. This is NOT historical
+out-of-sample E38 model evidence. See `docs/EMA_WINDOWS_E39_2026-10-04.md` for the
+eligible-date model replays, terminal-state correction and retained failed checks.
+No paid compute, production switch or live orders are authorized by this study.

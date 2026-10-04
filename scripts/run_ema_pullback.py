@@ -31,7 +31,7 @@ def policy(template, manifest, provenance, maker=True, penetration=2., mode='com
     return cfg
 
 
-async def run(bundle, prices, out, trained_for_study=False):
+async def run(bundle, prices, out, trained_for_study=False, trend_mode='strict', cash_closeout=False):
     out.mkdir(parents=True, exist_ok=False)
     manifest = json.loads((bundle / 'bundle.json').read_text())
     provenance = json.loads(prices.with_suffix('.json').read_text())
@@ -44,9 +44,16 @@ async def run(bundle, prices, out, trained_for_study=False):
              ('price_only_context', True, 2., 'price_only')]
     configs = {name: policy(template, manifest, provenance, maker, p, mode)
                for name, maker, p, mode in cases}
+    if trend_mode not in {'strict', 'soft'}:
+        raise ValueError('Unknown EMA trend mode')
+    for cfg in configs.values():
+        cfg['strategy']['ema_pullback'].update(trend_mode=trend_mode, downtrend_size_multiplier=.5)
+        if cash_closeout:
+            cfg['replay'].update(entry_cutoff_seconds=7800, closeout_seconds=600)
     report = {'study': 'EMA_pullback_20261004', 'status': 'frozen_before_replay',
         'primary': 'primary_maker', 'independent_holdout': False, 'new_training': trained_for_study,
-        'selection_performed': False, 'configs': configs, 'records': [],
+        'selection_performed': False, 'trend_mode': trend_mode, 'cash_closeout': cash_closeout,
+        'configs': configs, 'records': [],
         'provenance': provenance, 'model_version': manifest['model_version'],
         'limitations': ['Previously inspected September dates, not independent confirmation.',
                         'Binance second-open price proxies, not Roostoo bid/ask.',
@@ -76,5 +83,7 @@ if __name__ == '__main__':
     for field in ('bundle', 'prices', 'out'):
         parser.add_argument('--' + field, type=Path, required=True)
     parser.add_argument('--trained-for-study', action='store_true')
+    parser.add_argument('--trend-mode', choices=['strict', 'soft'], default='strict')
+    parser.add_argument('--cash-closeout', action='store_true')
     args = parser.parse_args()
-    asyncio.run(run(args.bundle, args.prices, args.out, args.trained_for_study))
+    asyncio.run(run(args.bundle, args.prices, args.out, args.trained_for_study, args.trend_mode, args.cash_closeout))

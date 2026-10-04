@@ -79,6 +79,11 @@ async def run_replay(config, events):
         raise ValueError("Explicit replay start_at and end_at are required")
     if not isinstance(timer, int) or not 1 <= timer <= 60:
         raise ValueError("Risk timer must be between one and sixty seconds")
+    entry_cutoff = spec.get('entry_cutoff_seconds', 0)
+    closeout = spec.get('closeout_seconds', 0)
+    if (not isinstance(entry_cutoff, int) or not isinstance(closeout, int)
+            or not 0 <= closeout <= entry_cutoff < end - start):
+        raise ValueError('Invalid independent-window closeout schedule')
     capital = float(spec.get("initial_capital", 100000))
     if not math.isfinite(capital) or capital <= 0:
         raise ValueError("Invalid initial capital")
@@ -103,7 +108,14 @@ async def run_replay(config, events):
 
     async def tick(t, prices=None):
         clock[0] = t
-        await hybrid.step(prices)
+        if closeout and t >= end - closeout:
+            # Close inside the window through the real budgeted order lifecycle.
+            # Never grant a free terminal fill or reuse inventory in the next run.
+            for symbol in set(hybrid.holdings) | {
+                o.symbol for o in manager.active_orders.values()
+            }:
+                hybrid.urgent[symbol] = 'window_closeout'
+        await hybrid.step(prices, allow_entries=t < end - entry_cutoff)
         snap = tracker.snapshot()
         point = dict(timestamp=t, nav=snap.nav, exposure=tracker.get_total_exposure())
         if curve and curve[-1]["timestamp"] == t:
@@ -209,6 +221,10 @@ async def run_replay(config, events):
         start_at=start,
         end_at=end,
         window_days=(end - start) / 86400,
+        initial_capital=capital,
+        initial_positions=[],
+        entry_cutoff_seconds=entry_cutoff,
+        closeout_seconds=closeout,
         final_nav=snap.nav,
         net_return=snap.nav / capital - 1,
         max_drawdown=max_drawdown,

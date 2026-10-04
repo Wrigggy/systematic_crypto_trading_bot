@@ -330,8 +330,9 @@ class HybridCoordinator:
         if len(self.holdings) >= int(self.config.get("max_positions", 3)):
             return
         snap = self.tracker.snapshot()
+        size_multiplier = self.ema.size_multiplier(symbol, int(self.now())) if self.ema else 1.
         allocation = min(
-            snap.nav * float(self.config.get("position_weight", 0.1)),
+            snap.nav * float(self.config.get("position_weight", 0.1)) * size_multiplier,
             snap.nav * float(self.config.get("max_single_exposure", 0.15)),
             snap.nav
             * max(
@@ -345,7 +346,7 @@ class HybridCoordinator:
             return
         maker = self.config.get("maker_preferred", True)
         self.pending_targets[symbol] = target
-        self._record("entry_intent", symbol, target=target)
+        self._record("entry_intent", symbol, target=target, size_multiplier=size_multiplier)
         await self.orders.submit(
             Order(
                 symbol=symbol,
