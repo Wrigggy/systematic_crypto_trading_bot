@@ -1,0 +1,49 @@
+{
+  "checked_at_utc": "2026-10-04T13:54:57.136319+00:00",
+  "scope": "general_portfolio_testing",
+  "orders_sent": 0,
+  "base_url": "https://mock-api.roostoo.com",
+  "checks": [
+    {
+      "endpoint": "/v3/serverTime",
+      "http_status": 200,
+      "success": true,
+      "clock_drift_ms": 40
+    },
+    {
+      "endpoint": "/v3/exchangeInfo",
+      "http_status": 200,
+      "success": true,
+      "trade_pair_count": 88,
+      "is_running": true
+    },
+    {
+      "endpoint": "/v3/balance",
+      "http_status": 200,
+      "success": true,
+      "wallet_asset_count": 1
+    },
+    {
+      "endpoint": "/v3/ticker",
+      "http_status": 200,
+      "success": true,
+      "valid_bid_ask": true
+    },
+    {
+      "endpoint": "/v3/pending_count",
+      "http_status": 200,
+      "success": false,
+      "pending_count": 0,
+      "valid_response": true
+    },
+    {
+      "endpoint": "/v3/query_order",
+      "http_status": 200,
+      "success": false,
+      "pending_rows": 0,
+      "empty_result": true,
+      "valid_response": true
+    }
+  ],
+  "status": "authenticated_read_only_checks_completed"
+}

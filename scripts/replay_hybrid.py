@@ -152,6 +152,9 @@ async def run_replay(config, events):
         if available_at < start:
             # Warmup populates indicators and normalization only; never positions.
             hybrid.prices.update(updates)
+            if hybrid.ema:
+                for symbol, (timestamp, price) in updates.items():
+                    hybrid.ema.observe(symbol, timestamp, price, available_at)
             audit.extend(hybrid.events)
             hybrid.events.clear()
             continue
@@ -220,6 +223,7 @@ async def run_replay(config, events):
         / len(holds)
         if holds
         else None,
+        fraction_completed_holds_1_to_2h=sum(3600 <= h <= 7200 for h in holds) / len(holds) if holds else None,
         open_hold_age_seconds={
             s: end - h.opened_at for s, h in hybrid.holdings.items()
         },

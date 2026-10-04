@@ -236,6 +236,25 @@ async def test_actual_fill_starts_hold_and_four_hour_exit_survives_missing_model
 
 
 @pytest.mark.asyncio
+async def test_ema_invalidates_pending_buy_before_next_decision():
+    from types import SimpleNamespace
+    clock, tracker, manager, hybrid, step = await setup_hybrid(
+        ema_pullback={'enabled': True, 'warmup_bars': 13})
+    reason = ['qualified']
+    hybrid.ema = SimpleNamespace(observe=lambda *args: None,
+        bands=lambda *args: (100., 1.), entry_check=lambda *args: reason[0])
+    start = clock[0]
+    await step(start, 98.9)
+    assert manager.has_pending and not hybrid.holdings
+    reason[0] = 'trend_not_up'
+    await step(start + 5, 98.9)
+    assert not manager.has_pending and not hybrid.holdings
+    assert tracker.snapshot().cash == 100_000
+    assert any(e['event'] == 'order_event' and e['order']['status'] == 'CANCELLED'
+               for e in hybrid.events)
+
+
+@pytest.mark.asyncio
 async def test_price_recovery_has_no_three_hour_minimum_and_missing_bands_do_not_block_exit():
     clock, tracker, manager, hybrid, step = await setup_hybrid()
     start = clock[0]

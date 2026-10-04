@@ -123,7 +123,9 @@ rejects missing, stale or non-causal predictions and normalizes by asset/horizon
 using past values only. `scripts/replay_hybrid.py` is the offline entry point;
 `config/hybrid.yaml` deliberately leaves decision cadence and artifacts unset.
 
-Target actual holds of three to four hours, without a minimum lock-in. E35 shared
+The latest October4 target is one to two hours, without a minimum lock-in; the
+three-to-four-hour E37 results remain historical. See `docs/EMA_PULLBACK_2026-10-04.md`.
+EMA context is opt-in, not a validated improvement. E35 shared
 multi-horizon training is complete; feature-exact live integration and deployment
 are not approved. Obtain
 the user's available machine and fresh compute budget before a training run; do

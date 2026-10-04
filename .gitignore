@@ -26,6 +26,7 @@ logs/
 .coverage
 
 # Environment secrets
+.secrets/
 .env
 !.env.example
 htmlcov/

@@ -33,6 +33,9 @@ class SignalFusion:
         self.model_scale = float(config.get("model_score_scale", 3.0))
         self.threshold = float(config.get("entry_threshold", 1.0))
         self.clip = float(config.get("strength_clip", 3.0))
+        self.require_long_support = config.get("require_long_support", True)
+        if not isinstance(self.require_long_support, bool):
+            raise ValueError('require_long_support must be boolean')
         values = (
             self.rule_weight,
             self.model_weight,
@@ -87,7 +90,7 @@ class SignalFusion:
         reason = "qualified"
         if not candidate:
             reason = "not_oversold"
-        elif model_strength <= 0 or model["long_support"] < 0:
+        elif model_strength <= 0 or (self.require_long_support and model["long_support"] < 0):
             reason = "model_disagreement"
         elif self.mode == "model_filter" and model_strength < 1:
             reason = "model_below_filter"

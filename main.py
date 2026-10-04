@@ -92,6 +92,10 @@ def _apply_env_overrides(config: dict) -> None:
     comp_secret = os.environ.get("ROOSTOO_COMP_API_SECRET", "")
     test_key = os.environ.get("ROOSTOO_API_KEY", "")
     test_secret = os.environ.get("ROOSTOO_API_SECRET", "")
+    testing_file = os.environ.get('ROOSTOO_TEST_CREDENTIAL_FILE')
+    if testing_file and not (comp_key or comp_secret or test_key or test_secret):
+        from plugins.roostoo.credentials import load_testing_credentials
+        test_key, test_secret = load_testing_credentials(testing_file)
 
     if comp_key and comp_secret:
         roostoo_cfg["api_key"] = comp_key

@@ -1,5 +1,13 @@
 # Multi horizon model and mean reversion implementation plan
 
+## October 4 amendment
+
+The latest requested holding target is now 1--2 hours. The opt-in EMA pullback,
+short-focused model study and read-only testing API connection are described in
+[the E38 record](EMA_PULLBACK_2026-10-04.md). Older parameters below remain
+historical E37 design and must not be mistaken for the latest target. No live
+hybrid deployment or orders are approved by the API connection check.
+
 ## October 3 E37 implementation and experiment closure
 
 Real strict-FP32 forecast bundles now enter the offline strategy through

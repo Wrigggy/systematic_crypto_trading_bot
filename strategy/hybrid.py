@@ -12,6 +12,7 @@ from execution.order_manager import OrderManager
 from plugins.model_inference.forecasts import ForecastBook, ForecastPacket
 from risk.tracker import PortfolioTracker
 from strategy.fusion import SignalFusion
+from strategy.ema_pullback import EmaPullbackHistory
 
 
 @dataclass
@@ -113,6 +114,7 @@ class HybridCoordinator:
         self.history = HourlyHistory(
             config.get("lookback_days", 20), config.get("sample_hours", 8)
         )
+        self.ema = EmaPullbackHistory(config['ema_pullback']) if config.get('ema_pullback', {}).get('enabled') else None
         self.holdings = {}
         self.prices = {}
         self.last_decision = {}
@@ -246,6 +248,8 @@ class HybridCoordinator:
                 raise ValueError("Out-of-order price")
             self.prices[symbol] = (timestamp, price)
             self.tracker.update_prices(symbol, price)
+            if self.ema:
+                self.ema.observe(symbol, timestamp, price, now)
         # First service already-triggered exits. Routine polling cannot consume all
         # risk capacity before a stop or deadline is evaluated.
         await self._risk(now)
@@ -260,15 +264,18 @@ class HybridCoordinator:
             pending = self.orders.for_symbol(symbol)
             observed = self.prices.get(symbol)
             fresh = observed is not None and now - observed[0] <= self.max_price_age
-            bands = self.history.bands(symbol, now)
+            bands = self.ema.bands(symbol, now) if self.ema else self.history.bands(symbol, now)
             rule = self.rules[symbol]
             fused = (
                 self.fusion.evaluate(observed[1], *bands, rule["entry_sigma"], signal)
                 if fresh and bands
                 else None
             )
+            ema_reason = (self.ema.entry_check(symbol, observed[1], now,
+                float(self.config['ema_pullback'].get('min_recovery_bps', 20)))
+                if self.ema and fresh else 'qualified')
             if any(o.side == Side.BUY for o in pending) and (
-                fused is None or not fused.eligible
+                fused is None or not fused.eligible or ema_reason != 'qualified'
             ):
                 await self.orders.cancel_symbol(symbol)
             if now - self.last_decision.get(symbol, -(10**12)) < self.cadence:
@@ -300,6 +307,10 @@ class HybridCoordinator:
                     fusion=fused.as_dict(),
                 )
                 if fused.eligible:
+                    if self.ema:
+                        if ema_reason != 'qualified':
+                            self._record('ema_entry_rejected', symbol, reason=ema_reason)
+                            continue
                     candidates.append(
                         (
                             fused.joint_strength,
