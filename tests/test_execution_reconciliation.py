@@ -55,6 +55,30 @@ def test_all_endpoints_share_budget_and_urgent_never_bypasses_ceiling():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize('response,accepted', [
+    ({'Success': True, 'TotalPending': 0}, True),
+    ({'Success': False, 'TotalPending': 0, 'ErrMsg': 'no pending order under this account'}, True),
+    ({'Success': False, 'TotalPending': 0, 'ErrMsg': 'authentication failed'}, False),
+    ({'Success': True, 'TotalPending': False}, False),
+    ({'Success': True, 'TotalPending': 1}, False),
+])
+async def test_roostoo_start_accepts_only_verified_empty_account(response, accepted):
+    executor = RoostooExecutor({})
+    executor._unsigned_request = AsyncMock(return_value={'ServerTime': executor._auth.get_timestamp()})
+    executor._load_exchange_info = AsyncMock()
+    executor._signed_request = AsyncMock(return_value=response)
+    try:
+        if accepted:
+            await executor.start()
+        else:
+            with pytest.raises(RuntimeError, match='Existing or unknown'):
+                await executor.start()
+            assert executor._session.closed
+    finally:
+        await executor.stop()
+
+
+@pytest.mark.asyncio
 async def test_cumulative_partial_and_cancel_race_book_quantity_vwap_and_fees_once():
     executor = AsyncMock()
     tracker = PortfolioTracker(1000)

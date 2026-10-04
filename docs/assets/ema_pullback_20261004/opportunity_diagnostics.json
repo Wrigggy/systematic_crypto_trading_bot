@@ -1,0 +1,53 @@
+{
+  "status": "descriptive_only_no_policy_selection",
+  "independent_holdout": false,
+  "grid_seconds": 300,
+  "start_at": 1788364800,
+  "end_at": 1789574400,
+  "excludes": [
+    "model_filter",
+    "episode_reset",
+    "position_state",
+    "cash",
+    "order_fills"
+  ],
+  "count_semantics": "Repeated grid observations, not independent trade opportunities.",
+  "per_asset": {
+    "BTC/USDT": {
+      "counts": {
+        "decision_grid_observations": 4032,
+        "trend_up": 788,
+        "oversold": 1319,
+        "oversold_and_trend_up": 3,
+        "oversold_trend_not_up": 1316,
+        "oversold_no_completed_bar_recovery": 2,
+        "oversold_qualified": 1
+      },
+      "first_to_last_grid_price_return": -0.01859566525525358
+    },
+    "XRP/USDT": {
+      "counts": {
+        "decision_grid_observations": 4032,
+        "trend_up": 1131,
+        "oversold": 1294,
+        "oversold_and_trend_up": 4,
+        "oversold_trend_not_up": 1290,
+        "oversold_no_completed_bar_recovery": 3,
+        "oversold_qualified": 1
+      },
+      "first_to_last_grid_price_return": -0.05243865948533821
+    },
+    "BNB/USDT": {
+      "counts": {
+        "decision_grid_observations": 4032,
+        "trend_up": 1213,
+        "oversold": 1052,
+        "oversold_and_trend_up": 10,
+        "oversold_no_completed_bar_recovery": 8,
+        "oversold_trend_not_up": 1042,
+        "oversold_qualified": 2
+      },
+      "first_to_last_grid_price_return": 0.03613967219790282
+    }
+  }
+}

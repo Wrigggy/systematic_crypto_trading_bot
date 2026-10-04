@@ -49,8 +49,11 @@ class RoostooExecutor(BaseExecutor):
                 raise RuntimeError("Cannot verify Roostoo server time")
             await self._load_exchange_info()
             pending = await self._signed_request("GET", "/v3/pending_count", {})
-            if not pending or not (pending.get("TotalPending") == 0 or
-                    pending.get("ErrMsg") == "no pending order under this account"):
+            empty = bool(pending) and type(pending.get("TotalPending")) is int and pending["TotalPending"] == 0
+            verified_empty = empty and (pending.get("Success") is True or
+                (pending.get("Success") is False and
+                 pending.get("ErrMsg") == "no pending order under this account"))
+            if not verified_empty:
                 raise RuntimeError("Existing or unknown exchange orders: reconcile before starting")
         except Exception:
             await self.stop()

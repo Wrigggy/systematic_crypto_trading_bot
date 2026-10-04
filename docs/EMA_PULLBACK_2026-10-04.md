@@ -54,7 +54,7 @@ Reference-model results reproduce after that correction:
 | Frozen case | Net return | Max drawdown | Closed trades | Active fill days | Median hold |
 |---|---:|---:|---:|---:|---:|
 | Primary maker, 2bps | -0.19557% | 0.22342% | 2 | 1 | 120min |
-| Conservative maker, 5bps | -0.19380% | See receipt | 2 | 1 | 120min |
+| Conservative maker, 5bps | -0.19380% | 0.22459% | 2 | 1 | 120min |
 | Taker sensitivity | -0.34604% | 0.40102% | 3 | 1 | 120min |
 | Price-only EMA | -0.17892% | 0.31409% | 3 | 2 | 120min |
 
@@ -66,6 +66,11 @@ Of 1,519 repeated model-qualified checks, 1,509 fail the trend gate and seven fa
 bar recovery. This identifies a narrow intersection of oversold and still-rising
 EMA conditions. Price-only still trades only three times: new model weights alone
 cannot be assumed to solve the price-policy opportunity bottleneck.
+
+The independent-of-model diagnostic confirms only1/1/2 fully qualified grid
+observations for BTC/XRP/BNB out of4,032each. This is coverage on the fixed grid,
+not a formal bound for every possible order/holding path or an independent sample
+count. See `assets/ema_pullback_20261004/opportunity_diagnostics.json`.
 
 Tracked receipt: `assets/ema_pullback_20261004/reference_comparison.json`.
 The official [event page](https://luma.com/coghwiyt), checked October4, still lists
@@ -81,6 +86,8 @@ Authenticated read-only checks completed October 4 at 13:54 UTC: server time,
 exchange definitions (88 pairs), balance, BTC/USD valid bid/ask, pending count and
 pending-order query. Empty-order API responses carry `Success=false`; only the
 documented empty-result messages are accepted, not arbitrary HTTP200 failures.
+The same fail-closed empty-account contract is now enforced by the executor's
+startup check. Zero counts accompanying authentication errors are not accepted.
 No placement, cancellation or short operation exists in this checker. No orders
 were submitted. Receipt: `assets/ema_pullback_20261004/roostoo_readonly.json`.
 
@@ -117,3 +124,11 @@ No adaptive search or post-hoc policy reselection is scheduled. Two seeds and
 their validation-selected checkpoints are retained regardless of replay PnL.
 
 Training/backup completion and measured results will be added only after observed.
+
+## Verification so far
+
+Bot regression suite: 299 passed, one optional skip, four pre-existing small-sample
+NumPy metric warnings. Research local suite: 184 passed, two CUDA skips. Remote
+startup suite: 24 passed. The discarded 12-update throughput/label canary has
+120 direct TWAP probes with maximum error2.114e-9 and mean step time55.0ms.
+These are engineering checks, not financial performance or live fill validation.
