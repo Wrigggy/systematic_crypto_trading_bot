@@ -161,3 +161,11 @@ replays show greater activity but negative average returns. This is NOT historic
 out-of-sample E38 model evidence. See `docs/EMA_WINDOWS_E39_2026-10-04.md` for the
 eligible-date model replays, terminal-state correction and retained failed checks.
 No paid compute, production switch or live orders are authorized by this study.
+
+E40 October5 is complete: fixed capped-displacement/model-floor plus completed-
+minute flow confirmation,75price-only window rows and five eligible-date model
+rows. All80finish flat,26controls reproduce E39. Primary historical mean-0.6107
+percent; model primary-0.1224percent,25trades/11days. No deployment approval.
+`docs/STRATEGY_LATEST.md` and `config/strategy_latest.yaml` are the latest research
+specification; the live guard remains. See E40 evidence for negative/mixed entry
+markouts. No new training or cloud/instance action was performed.

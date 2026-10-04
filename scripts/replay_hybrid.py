@@ -29,17 +29,26 @@ from strategy.hybrid import HybridCoordinator
 
 class ReplayEvent(BaseModel):
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
-    kind: Literal["price", "hourly", "forecast"]
+    kind: Literal["price", "hourly", "forecast", "flow"]
     available_at: int = Field(ge=0)
     timestamp: int = Field(ge=0)
     symbol: str
     close: float | None = Field(default=None, gt=0)
     forecast: ForecastPacket | None = None
+    quote_volume: float | None = Field(default=None, ge=0)
+    taker_buy_quote_volume: float | None = Field(default=None, ge=0)
 
     @model_validator(mode="after")
     def check_event(self):
         if self.timestamp > self.available_at:
             raise ValueError("Event is available before its data timestamp")
+        if self.kind == 'flow':
+            if (self.timestamp % 60 or self.close is None or self.forecast is not None
+                    or self.quote_volume is None or self.taker_buy_quote_volume is None
+                    or self.taker_buy_quote_volume > self.quote_volume):
+                raise ValueError('Invalid completed-minute flow envelope')
+        elif self.quote_volume is not None or self.taker_buy_quote_volume is not None:
+            raise ValueError('Flow fields require a flow event')
         if self.kind == "forecast":
             p = self.forecast
             if (
@@ -141,6 +150,10 @@ async def run_replay(config, events):
                 raise ValueError("Replay symbol outside declared trading universe")
             if event.kind == "forecast":
                 hybrid.ingest_forecast(event.forecast)
+            elif event.kind == 'flow':
+                if hybrid.entry_quality:
+                    hybrid.entry_quality.observe(event.symbol, event.timestamp, event.close,
+                        event.quote_volume, event.taker_buy_quote_volume, available_at)
             elif event.kind == "hourly":
                 hybrid.history.add(
                     event.symbol, event.timestamp, event.close, available_at

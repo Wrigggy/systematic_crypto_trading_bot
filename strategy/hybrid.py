@@ -13,6 +13,7 @@ from plugins.model_inference.forecasts import ForecastBook, ForecastPacket
 from risk.tracker import PortfolioTracker
 from strategy.fusion import SignalFusion
 from strategy.ema_pullback import EmaPullbackHistory
+from strategy.entry_quality import EntryQualityHistory
 
 
 @dataclass
@@ -115,6 +116,8 @@ class HybridCoordinator:
             config.get("lookback_days", 20), config.get("sample_hours", 8)
         )
         self.ema = EmaPullbackHistory(config['ema_pullback']) if config.get('ema_pullback', {}).get('enabled') else None
+        self.entry_quality = (EntryQualityHistory(config['entry_quality'])
+                              if config.get('entry_quality', {}).get('enabled') else None)
         self.holdings = {}
         self.prices = {}
         self.last_decision = {}
@@ -274,8 +277,10 @@ class HybridCoordinator:
             ema_reason = (self.ema.entry_check(symbol, observed[1], now,
                 float(self.config['ema_pullback'].get('min_recovery_bps', 20)))
                 if self.ema and fresh else 'qualified')
+            quality = self.entry_quality.check(symbol, now) if self.entry_quality else {'reason': 'qualified'}
             if any(o.side == Side.BUY for o in pending) and (
                 fused is None or not fused.eligible or ema_reason != 'qualified'
+                or quality['reason'] != 'qualified'
             ):
                 await self.orders.cancel_symbol(symbol)
             if now - self.last_decision.get(symbol, -(10**12)) < self.cadence:
@@ -305,8 +310,12 @@ class HybridCoordinator:
                     price=price,
                     model_score=None if signal is None else signal["composite"],
                     fusion=fused.as_dict(),
+                    entry_quality=quality,
                 )
                 if fused.eligible:
+                    if quality['reason'] != 'qualified':
+                        self._record('quality_entry_rejected', symbol, **quality)
+                        continue
                     if self.ema:
                         if ema_reason != 'qualified':
                             self._record('ema_entry_rejected', symbol, reason=ema_reason)

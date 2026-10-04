@@ -2,6 +2,15 @@
 
 A factor-first cryptocurrency trading system with a pluggable expression-tree alpha contract. Research discovers alphas, exports them as JSON, and this system consumes them — no code changes needed.
 
+## Latest hybrid research strategy
+
+The October 5 E40 specification is [STRATEGY_LATEST.md](docs/STRATEGY_LATEST.md),
+with full resolved parameters in [strategy_latest.yaml](config/strategy_latest.yaml)
+and [backtest evidence](docs/ENTRY_QUALITY_E40_2026-10-05.md). It combines price
+mean reversion, existing multi-horizon forecasts and causal trade-flow confirmation.
+It remains unprofitable after costs and is **research-only**, not enabled by the
+live quick-start instructions below. The hybrid live guard is intentionally retained.
+
 ## Architecture
 
 ```

@@ -1,0 +1,90 @@
+{
+  "replays": 80,
+  "all_flat_and_reconciled": true,
+  "maximum_cash_error": 7.810285751475021e-11,
+  "maximum_baseline_return_difference": 0.0,
+  "baseline_checks": 26,
+  "entry_diagnostics": {
+    "baseline": {
+      "trades": 1209,
+      "markout_5m_bps": -7.299557968905154,
+      "markout_15m_bps": -8.738070334649667,
+      "markout_30m_bps": -7.539370560801275,
+      "markout_60m_bps": -9.049013576795405,
+      "markout_120m_bps": -9.115426590782183,
+      "mae_120m_bps": -71.05092482546767,
+      "mfe_120m_bps": 49.78816080367552
+    },
+    "quality_maker": {
+      "trades": 928,
+      "markout_5m_bps": -7.675981231620025,
+      "markout_15m_bps": -8.699616907305627,
+      "markout_30m_bps": -6.859030435395399,
+      "markout_60m_bps": -7.907986529707296,
+      "markout_120m_bps": -9.547614188528534,
+      "mae_120m_bps": -70.29252678482591,
+      "mfe_120m_bps": 47.8357924607932
+    },
+    "quality_maker_5bps": {
+      "trades": 581,
+      "markout_5m_bps": -10.760265662207575,
+      "markout_15m_bps": -11.029160516439726,
+      "markout_30m_bps": -8.682329409639266,
+      "markout_60m_bps": -8.152165849483257,
+      "markout_120m_bps": -9.482604312904712,
+      "mae_120m_bps": -74.3047335829738,
+      "mfe_120m_bps": 50.93317556724084
+    },
+    "model_baseline": {
+      "trades": 38,
+      "markout_5m_bps": -7.830283880381498,
+      "markout_15m_bps": -7.147255251980613,
+      "markout_30m_bps": -5.4913239118785,
+      "markout_60m_bps": -5.88102664795499,
+      "markout_120m_bps": -2.888590181387459,
+      "mae_120m_bps": -68.3745559927501,
+      "mfe_120m_bps": 60.5289127378448
+    },
+    "model_fusion_fix": {
+      "trades": 31,
+      "markout_5m_bps": -8.088552958849858,
+      "markout_15m_bps": -4.311025125833095,
+      "markout_30m_bps": -0.05423328732559853,
+      "markout_60m_bps": -1.3396099068593397,
+      "markout_120m_bps": -7.616823823229532,
+      "mae_120m_bps": -63.96243011712555,
+      "mfe_120m_bps": 59.21858506016128
+    },
+    "model_quality_maker": {
+      "trades": 25,
+      "markout_5m_bps": -2.0406879908269286,
+      "markout_15m_bps": -0.28858142063015224,
+      "markout_30m_bps": 2.992431210845714,
+      "markout_60m_bps": -5.817810340271335,
+      "markout_120m_bps": -4.912968975283461,
+      "mae_120m_bps": -54.57030302406394,
+      "mfe_120m_bps": 59.23749224147778
+    },
+    "model_quality_maker_5bps": {
+      "trades": 13,
+      "markout_5m_bps": -9.74784292806465,
+      "markout_15m_bps": -6.864691560690867,
+      "markout_30m_bps": 1.1990723140956696,
+      "markout_60m_bps": -5.424252977008001,
+      "markout_120m_bps": -5.399988346391089,
+      "mae_120m_bps": -61.263328880970775,
+      "mfe_120m_bps": 75.40937031340708
+    },
+    "model_quality_taker": {
+      "trades": 42,
+      "markout_5m_bps": 0.22737719162317135,
+      "markout_15m_bps": 3.774158379563789,
+      "markout_30m_bps": 4.514116824808833,
+      "markout_60m_bps": 5.429029120434102,
+      "markout_120m_bps": 8.82815581931749,
+      "mae_120m_bps": -45.683646355536496,
+      "mfe_120m_bps": 62.220625427659115
+    }
+  },
+  "diagnostic_scope": "Gross post-fill fixed-horizon markouts, including prices after actual early exit. Not a tradable alternative equity curve."
+}

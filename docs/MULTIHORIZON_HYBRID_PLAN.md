@@ -1,5 +1,12 @@
 # Multi horizon model and mean reversion implementation plan
 
+## October 5 latest implementation
+
+[STRATEGY_LATEST.md](STRATEGY_LATEST.md) and `config/strategy_latest.yaml` define
+the E40 entry-quality candidate. Its fixed replay improves losses but is not
+deployment-approved. The dated designs below remain historical; do not combine
+their thresholds with the latest config without a new explicit experiment.
+
 ## October 4 amendment
 
 The latest requested holding target is now 1--2 hours. The opt-in EMA pullback,

@@ -33,6 +33,16 @@ class SignalFusion:
         self.model_scale = float(config.get("model_score_scale", 3.0))
         self.threshold = float(config.get("entry_threshold", 1.0))
         self.clip = float(config.get("strength_clip", 3.0))
+        self.rule_clip = float(config.get('rule_strength_clip', self.clip))
+        self.minimum_model = float(config.get('minimum_model_strength', 0.))
+        self.max_deviation = config.get('max_price_deviation_sigma')
+        if self.max_deviation is not None:
+            self.max_deviation = float(self.max_deviation)
+            if not math.isfinite(self.max_deviation) or self.max_deviation <= 0:
+                raise ValueError('Invalid maximum price deviation')
+        if (not math.isfinite(self.rule_clip) or self.rule_clip <= 0
+                or not math.isfinite(self.minimum_model) or not 0 <= self.minimum_model <= self.clip):
+            raise ValueError('Invalid entry-quality score bounds')
         self.require_long_support = config.get("require_long_support", True)
         if not isinstance(self.require_long_support, bool):
             raise ValueError('require_long_support must be boolean')
@@ -64,16 +74,17 @@ class SignalFusion:
         ):
             raise ValueError("Invalid price signal inputs")
         price_z = (price - middle) / std
-        rule_strength = max(-self.clip, min(self.clip, -price_z / entry_sigma))
+        rule_strength = max(-self.rule_clip, min(self.rule_clip, -price_z / entry_sigma))
         candidate = price_z < -entry_sigma
+        extreme = self.max_deviation is not None and -price_z > self.max_deviation
         if self.mode == "price_only":
             return FusedSignal(
                 price_z,
                 rule_strength,
                 None,
                 rule_strength,
-                candidate,
-                "qualified" if candidate else "not_oversold",
+                candidate and not extreme,
+                'extreme_deviation' if extreme else ("qualified" if candidate else "not_oversold"),
             )
         if model is None:
             return FusedSignal(
@@ -90,8 +101,12 @@ class SignalFusion:
         reason = "qualified"
         if not candidate:
             reason = "not_oversold"
+        elif extreme:
+            reason = 'extreme_deviation'
         elif model_strength <= 0 or (self.require_long_support and model["long_support"] < 0):
             reason = "model_disagreement"
+        elif model_strength < self.minimum_model:
+            reason = 'model_below_quality_floor'
         elif self.mode == "model_filter" and model_strength < 1:
             reason = "model_below_filter"
         elif self.mode == "combined" and joint < self.threshold:

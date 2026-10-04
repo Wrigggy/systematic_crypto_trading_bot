@@ -1,0 +1,278 @@
+{
+  "study": "E40_entry_quality",
+  "status": "frozen_before_replay",
+  "overlay": {
+    "strategy": {
+      "fusion": {
+        "rule_strength_clip": 1.5,
+        "max_price_deviation_sigma": 1.5,
+        "minimum_model_strength": 0.5
+      },
+      "entry_quality": {
+        "enabled": true,
+        "minimum_recent_buy_share": 0.5,
+        "minimum_share_improvement": 0.05
+      }
+    }
+  },
+  "cases": [
+    [
+      "baseline",
+      false,
+      2.0
+    ],
+    [
+      "quality_maker",
+      true,
+      2.0
+    ],
+    [
+      "quality_maker_5bps",
+      true,
+      5.0
+    ]
+  ],
+  "windows": [
+    [
+      1757433600,
+      1758643200
+    ],
+    [
+      1758643200,
+      1759852800
+    ],
+    [
+      1759852800,
+      1761062400
+    ],
+    [
+      1761062400,
+      1762272000
+    ],
+    [
+      1762272000,
+      1763481600
+    ],
+    [
+      1763481600,
+      1764691200
+    ],
+    [
+      1764691200,
+      1765900800
+    ],
+    [
+      1765900800,
+      1767110400
+    ],
+    [
+      1767110400,
+      1768320000
+    ],
+    [
+      1768320000,
+      1769529600
+    ],
+    [
+      1769529600,
+      1770739200
+    ],
+    [
+      1770739200,
+      1771948800
+    ],
+    [
+      1771948800,
+      1773158400
+    ],
+    [
+      1773158400,
+      1774368000
+    ],
+    [
+      1774368000,
+      1775577600
+    ],
+    [
+      1775577600,
+      1776787200
+    ],
+    [
+      1776787200,
+      1777996800
+    ],
+    [
+      1777996800,
+      1779206400
+    ],
+    [
+      1779206400,
+      1780416000
+    ],
+    [
+      1780416000,
+      1781625600
+    ],
+    [
+      1781625600,
+      1782835200
+    ],
+    [
+      1782835200,
+      1784044800
+    ],
+    [
+      1784044800,
+      1785254400
+    ],
+    [
+      1785254400,
+      1786464000
+    ],
+    [
+      1786464000,
+      1787673600
+    ]
+  ],
+  "new_training": false,
+  "independent_holdout": false,
+  "selection_performed": false,
+  "primary": "quality_maker",
+  "records": [],
+  "limitation": "Historical windows are price-only. Eligible-date model replay is separate. No parameter sweep or fresh holdout.",
+  "representative_config": {
+    "strategy": {
+      "engine": "hybrid",
+      "decision_interval_seconds": 300,
+      "lookback_days": 20,
+      "sample_hours": 8,
+      "rules": {
+        "BTC/USDT": {
+          "entry_sigma": 0.5,
+          "exit_z": 0.0
+        },
+        "XRP/USDT": {
+          "entry_sigma": 0.5,
+          "exit_z": 0.0
+        },
+        "BNB/USDT": {
+          "entry_sigma": 0.5,
+          "exit_z": 0.0
+        }
+      },
+      "fusion": {
+        "mode": "price_only",
+        "rule_weight": 0.5,
+        "model_weight": 0.5,
+        "model_score_scale": 1.5,
+        "entry_threshold": 0.75,
+        "strength_clip": 3.0,
+        "require_long_support": false,
+        "rule_strength_clip": 1.5,
+        "max_price_deviation_sigma": 1.5,
+        "minimum_model_strength": 0.5
+      },
+      "maker_preferred": true,
+      "model_exit_enabled": false,
+      "review_after_seconds": 3600,
+      "max_holding_seconds": 7200,
+      "weak_support_seconds": 300,
+      "review_support_threshold": 0.0,
+      "exit_timeout_seconds": 120,
+      "stop_loss_pct": 0.03,
+      "trailing_stop_pct": 0.03,
+      "daily_drawdown_limit": 0.05,
+      "position_weight": 0.1,
+      "max_single_exposure": 0.15,
+      "max_portfolio_exposure": 0.5,
+      "max_positions": 3,
+      "max_price_age_seconds": 120,
+      "ema_pullback": {
+        "enabled": true,
+        "fast_half_life_hours": 6,
+        "slow_half_life_hours": 24,
+        "vol_half_life_hours": 24,
+        "warmup_bars": 2016,
+        "min_recovery_bps": 20,
+        "trend_mode": "soft",
+        "downtrend_size_multiplier": 0.5
+      },
+      "entry_quality": {
+        "enabled": true,
+        "minimum_recent_buy_share": 0.5,
+        "minimum_share_improvement": 0.05
+      }
+    },
+    "forecast": {
+      "model_version": "not_used_price_only",
+      "preprocessing_version": "not_used_price_only",
+      "max_data_age_seconds": 120,
+      "long_heads": [
+        "h60m",
+        "h120m"
+      ],
+      "normalization": {
+        "window_seconds": 86400,
+        "min_samples": 60,
+        "min_span_seconds": 82800,
+        "max_gap_seconds": 600
+      },
+      "heads": [
+        {
+          "name": "h15m",
+          "window_start_seconds": 450,
+          "window_end_seconds": 900,
+          "target": "twap_log_return",
+          "weight": 0.1
+        },
+        {
+          "name": "h30m",
+          "window_start_seconds": 900,
+          "window_end_seconds": 1800,
+          "target": "twap_log_return",
+          "weight": 0.25
+        },
+        {
+          "name": "h60m",
+          "window_start_seconds": 1800,
+          "window_end_seconds": 3600,
+          "target": "twap_log_return",
+          "weight": 0.4
+        },
+        {
+          "name": "h120m",
+          "window_start_seconds": 3600,
+          "window_end_seconds": 7200,
+          "target": "twap_log_return",
+          "weight": 0.2
+        },
+        {
+          "name": "h240m",
+          "window_start_seconds": 7200,
+          "window_end_seconds": 14400,
+          "target": "twap_log_return",
+          "weight": 0.05
+        }
+      ]
+    },
+    "execution": {
+      "order_timeout_seconds": 120,
+      "fee_market_bps": 10.0,
+      "fee_limit_bps": 5.0,
+      "slippage_bps": 0.0,
+      "limit_penetration_bps": 2.0,
+      "max_requests_per_minute": 5,
+      "emergency_request_reserve": 1,
+      "max_price_age_seconds": 120
+    },
+    "replay": {
+      "events_path": "completed_minute_close_archive",
+      "start_at": 1757433600,
+      "end_at": 1758643200,
+      "timer_seconds": 60,
+      "initial_capital": 100000,
+      "entry_cutoff_seconds": 7800,
+      "closeout_seconds": 600
+    }
+  }
+}

@@ -1,0 +1,10 @@
+# Frozen E40 research overlay. Not a deployment or a trained quality model.
+strategy:
+  fusion:
+    rule_strength_clip: 1.5
+    max_price_deviation_sigma: 1.5
+    minimum_model_strength: 0.5  # Composite score >= 0.75 with model_score_scale 1.5.
+  entry_quality:
+    enabled: true
+    minimum_recent_buy_share: 0.50
+    minimum_share_improvement: 0.05
